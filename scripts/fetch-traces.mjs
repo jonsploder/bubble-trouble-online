@@ -1,4 +1,6 @@
-// Download session logs from the trace collector and pair them into replayable traces.
+// Download session logs and level stats from the trace collector.
+//  - session logs are paired into replayable traces in traces/
+//  - level stats (how each attempt at each level went) go to stats/levels/
 //
 //   npm run fetch-traces
 //
@@ -25,22 +27,30 @@ const auth = { Authorization: `Bearer ${key}` };
 const halvesDir = path.join('traces', '.halves');
 fs.mkdirSync(halvesDir, { recursive: true });
 
-let cursor = null, fetched = 0, total = 0;
-do {
-  const res = await fetch(`${base}/list${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { headers: auth });
-  if (!res.ok) { console.error(`list failed: ${res.status} ${await res.text()}`); process.exit(1); }
-  const page = await res.json();
-  for (const { key: k } of page.keys) {
-    total++;
-    const local = path.join(halvesDir, k.replace(/^traces\//, '').replace(/\//g, '_'));
-    if (fs.existsSync(local)) continue;
-    const r = await fetch(`${base}/get?key=${encodeURIComponent(k)}`, { headers: auth });
-    if (!r.ok) { console.error(`get ${k} failed: ${r.status}`); continue; }
-    fs.writeFileSync(local, await r.text());
-    fetched++;
-  }
-  cursor = page.cursor;
-} while (cursor);
+/** Mirror every record under `prefix` into `dir` (skipping ones already here). */
+async function mirror(prefix, dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  let cursor = null, fetched = 0, total = 0;
+  do {
+    const res = await fetch(`${base}/list?prefix=${prefix}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { headers: auth });
+    if (!res.ok) { console.error(`list failed: ${res.status} ${await res.text()}`); process.exit(1); }
+    const page = await res.json();
+    for (const { key: k } of page.keys) {
+      total++;
+      const local = path.join(dir, k.slice(prefix.length).replace(/\//g, '_'));
+      if (fs.existsSync(local)) continue;
+      const r = await fetch(`${base}/get?key=${encodeURIComponent(k)}`, { headers: auth });
+      if (!r.ok) { console.error(`get ${k} failed: ${r.status}`); continue; }
+      fs.writeFileSync(local, await r.text());
+      fetched++;
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  return { fetched, total };
+}
+
+const { fetched, total } = await mirror('traces/', halvesDir);
+const lv = await mirror('levels/', path.join('stats', 'levels'));
 
 // pair halves by session id
 const sessions = new Map();
@@ -63,3 +73,4 @@ for (const [sid, s] of sessions) {
   written++;
 }
 console.log(`${total} player logs on the server, ${fetched} newly downloaded. ${complete} complete sessions (${written} new) in traces/. ${sessions.size - complete} still missing a player's log.`);
+console.log(`${lv.total} level-stat records on the server, ${lv.fetched} newly downloaded to stats/levels/.`);

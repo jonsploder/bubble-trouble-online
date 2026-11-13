@@ -1,5 +1,6 @@
-import { H, PH, PW, RADII, W, hasSpikes, stopY } from './sim';
-import type { GameEvent, Level, PickupKind, State } from './sim';
+import { H, PH, PW, RADII, W, hasSpikes, levelAt, stopY } from './sim';
+import type { GameEvent, Level, PickupKind, State, Mode } from './sim';
+import { MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, VERSUS_WINS } from './sim';
 
 export const VIEW_W = W;
 export const VIEW_H = H + 60;
@@ -16,6 +17,7 @@ const PICK: Record<PickupKind, { c: string; label: string; name: string }> = {
   slow: { c: '#b197fc', label: '~', name: 'Slow' },
   time: { c: '#ffd43b', label: '+', name: 'Time' },
   life: { c: '#ff8787', label: '♥', name: 'Life' },
+  haste: { c: '#fcc419', label: '!', name: 'Haste' },
 };
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; c: string }
@@ -195,6 +197,62 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
     drawToken(ctx, pk.kind, pk.x, pk.y - 3 + Math.sin(s.tick * 0.12 + pk.x) * 2, 14);
   }
 
+  // portals: orange in, blue out (both work both ways)
+  if (L.portals) {
+    L.portals.forEach(([ax, ay, bx, by]) => {
+      for (const [x, y, c] of [[ax, ay, '#ff922b'], [bx, by, '#4dabf7']] as [number, number, string][]) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.strokeStyle = c;
+        ctx.shadowColor = c;
+        ctx.shadowBlur = 14;
+        for (let k = 0; k < 3; k++) {
+          ctx.globalAlpha = 0.9 - k * 0.25;
+          ctx.lineWidth = 3 - k;
+          ctx.beginPath(); ctx.ellipse(0, 0, 20 - k * 5, 28 - k * 7, 0, s.tick * 0.08 + k, s.tick * 0.08 + k + Math.PI * 1.5); ctx.stroke();
+        }
+        ctx.restore();
+      }
+    });
+  }
+
+  // Tethered: a rope between neighbouring players, sagging when slack and taut when stretched
+  if (s.mode === 'tethered') {
+    for (let i = 0; i + 1 < s.players.length; i++) {
+      const a = s.players[i], b = s.players[i + 1];
+      if (a.down || b.down) continue;
+      const span = Math.abs(b.x - a.x), sag = Math.max(0, 1 - span / 240) * 40, y = H - PH / 2;
+      ctx.strokeStyle = span > 228 ? '#ff8787' : '#c9a66b';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(a.x, y); ctx.quadraticCurveTo((a.x + b.x) / 2, y + sag, b.x, y); ctx.stroke();
+    }
+  }
+
+  // Revive: a circle to stand in, a countdown bar, and progress
+  if (s.mode === 'revive') {
+    s.players.forEach((p, i) => {
+      if (!p.down || p.rt <= 0) return;
+      const col = PLAYER_COL[i % PLAYER_COL.length], left = p.rt / REVIVE_TICKS;
+      ctx.save();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath(); ctx.ellipse(p.x, H - 4, REVIVE_R, 9, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(p.x - 30, H - PH - 30, 60, 8);
+      ctx.fillStyle = left < 0.33 && s.tick % 20 < 10 ? '#ff6b6b' : left < 0.33 ? '#ffa8a8' : '#ffd43b';
+      ctx.fillRect(p.x - 30, H - PH - 30, 60 * left, 8);
+      if (p.rp > 0) {
+        ctx.strokeStyle = '#8ce99a';
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(p.x, H - PH / 2, 26, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * p.rp) / REVIVE_NEED); ctx.stroke();
+      }
+      text(ctx, `${Math.ceil(p.rt / 60)}`, p.x, H - PH - 44, 14, '#fff');
+      ctx.restore();
+    });
+  }
+
   // balls
   for (const b of s.balls) {
     const r = RADII[b.size];
@@ -222,6 +280,15 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   s.players.forEach((pl, i) => {
     if (pl.lives <= 0 && pl.down) return; // out of the game
     if (pl.invuln > 0 && pl.invuln % 8 < 4) return;
+    if (s.mode === 'revive' && pl.down && pl.rt <= 0) return;
+    if (pl.haste > 0 && !pl.down) {
+      // speed lines behind a hasted player
+      ctx.fillStyle = PLAYER_COL[i % PLAYER_COL.length];
+      for (let k = 1; k <= 3; k++) {
+        ctx.globalAlpha = 0.25 - k * 0.06;
+        ctx.fillRect(pl.x - PW / 2 - pl.face * k * 9, H - PH + 8, PW, PH - 8);
+      }
+    }
     ctx.globalAlpha = pl.down ? 0.22 : 1; // hit on this attempt: a ghost where they fell
     // Online, the other player's position is a prediction that gets corrected. Ease toward
     // it instead of snapping, so corrections read as a quick slide rather than a teleport.
@@ -242,6 +309,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
     ctx.fillRect(p.x + 2 + p.face * 2, y + 16, 3, 6);
     ctx.fillStyle = col;
     ctx.fillRect(p.x - 1.5, y, 3, 8); // antenna
+    if (s.mode === 'onegun' || s.mode === 'vip') drawRole(ctx, pl.vip ? 'vip' : pl.armed && s.mode === 'onegun' ? 'gun' : '', p.x, y, s.tick);
     if (net && net.you === i && s.phase === 'ready') {
       ctx.beginPath(); ctx.moveTo(p.x - 8, y - 22); ctx.lineTo(p.x + 8, y - 22); ctx.lineTo(p.x, y - 10); ctx.fill();
     }
@@ -278,14 +346,24 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   ctx.fillRect(20, H + 12, W - 40, 10);
   ctx.fillStyle = frac < 0.25 ? '#ff6b6b' : '#ffd43b';
   ctx.fillRect(20, H + 12, (W - 40) * frac, 10);
-  text(ctx, `${s.level + 1}/${total}  ${L.name}`, 20, H + 42, 16, '#cfd4ff', 'left');
+  text(ctx, s.mode === 'versus' ? `${L.name}  -  first to ${VERSUS_WINS}` : `${s.level + 1}/${total}  ${L.name}`, 20, H + 42, 16, '#cfd4ff', 'left');
+  if (s.mode === 'revive') text(ctx, `team ${'♥'.repeat(Math.max(0, s.team))}`, W - 110, H + 42, 16, '#ff8787', 'right');
   text(ctx, String(s.score).padStart(6, '0'), W - 20, H + 42, 18, '#fff', 'right');
   s.players.forEach((p, i) => {
     // one block per player: weapon icon, then their own lives in their own colour
     const hx = 300 + (i * 500) / s.players.length;
     ctx.globalAlpha = p.lives > 0 ? 1 : 0.3;
-    drawToken(ctx, p.weapon, hx, H + 42, 11);
-    text(ctx, p.lives > 0 ? '♥'.repeat(p.lives) : 'out', hx + 18, H + 43, p.lives > 0 ? 17 : 13, PLAYER_COL[i % PLAYER_COL.length], 'left');
+    if (p.vip) drawRole(ctx, 'vip', hx, H + 46, 0, 0.8);
+    else {
+      if (!p.armed) ctx.globalAlpha *= 0.3; // can't shoot in this mode
+      drawToken(ctx, p.weapon, hx, H + 42, 11);
+      ctx.globalAlpha = p.lives > 0 ? 1 : 0.3;
+    }
+    const label = s.mode === 'revive' ? '' : p.lives > 0 ? '♥'.repeat(p.lives) : 'out';
+    text(ctx, label, hx + 18, H + 43, p.lives > 0 ? 17 : 13, PLAYER_COL[i % PLAYER_COL.length], 'left');
+    const after = hx + 18 + (label.length ? label.length * 11 + 8 : 0);
+    if (s.mode === 'versus') text(ctx, '★'.repeat(p.wins) + '☆'.repeat(Math.max(0, VERSUS_WINS - p.wins)), after, H + 43, 14, '#ffd43b', 'left');
+    else if (p.haste > 0) text(ctx, 'HASTE', after, H + 43, 11, '#fcc419', 'left');
     ctx.globalAlpha = 1;
   });
 
@@ -294,6 +372,12 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   // overlays
   if (s.phase === 'ready') {
     if (net) text(ctx, `You are ${COLOR_NAMES[net.you]}`, W / 2, 275, 16, PLAYER_COL[net.you]);
+    if (s.mode !== 'classic' && s.mode !== 'versus') {
+      const me = net ? s.players[net.you] : undefined;
+      const roles = s.mode === 'onegun' || s.mode === 'vip';
+      const role = me && roles ? (me.vip ? 'You are the VIP. Stay alive!' : me.armed ? (s.mode === 'onegun' ? 'You have the gun!' : 'Protect the VIP!') : 'No gun. Dodge!') : '';
+      text(ctx, role || MODES.find((x) => x.id === s.mode)!.hint, W / 2, 302, 16, '#ffd43b', 'center', role ? 700 : 400);
+    }
     text(ctx, L.name, W / 2, 190, 40);
     if (L.hint) text(ctx, L.hint, W / 2, 235, 16, '#cfd4ff', 'center', 400);
     if (touch) text(ctx, 'Left thumb: slide to move      Right thumb: hold to fire', W / 2, 320, 15, '#8a90c7', 'center', 400);
@@ -302,11 +386,21 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   else if (s.phase === 'won') overlay(ctx, 'YOU WIN', '#ffd43b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
   if (s.paused) {
     const quit = net ? 'quit to lobby' : 'quit to menu';
-    overlay(ctx, 'PAUSED', '#fff', touch ? '' : `Enter: resume      Q: ${quit}`);
+    ctx.fillStyle = 'rgba(7,8,15,0.88)';
+    ctx.fillRect(0, 0, W, H);
+    text(ctx, 'PAUSED', W / 2, 46, 40, '#fff');
+    text(ctx, net ? 'Paused for everyone' : L.hint ?? '', W / 2, 82, 14, '#8a90c7', 'center', 400);
+    // every mode's rules, the one being played picked out
+    MODES.forEach((m, k) => {
+      const y = 122 + k * 46, on = m.id === s.mode;
+      if (on) { ctx.fillStyle = 'rgba(255,212,59,0.08)'; ctx.fillRect(40, y - 20, W - 80, 42); }
+      text(ctx, m.name, 60, y - 6, 15, on ? '#ffd43b' : '#cfd4ff', 'left');
+      text(ctx, m.hint, 60, y + 11, 12, on ? '#fff' : '#8a90c7', 'left', 400);
+    });
     if (touch) {
-      text(ctx, 'RESUME', W * 0.3, 280, 30, '#8ce99a');
-      text(ctx, 'QUIT', W * 0.7, 280, 30, '#ff8787');
-    } else if (net) text(ctx, 'Paused for both players', W / 2, 295, 14, '#8a90c7', 'center', 400);
+      text(ctx, 'RESUME', W * 0.3, 418, 28, '#8ce99a');
+      text(ctx, 'QUIT', W * 0.7, 418, 28, '#ff8787');
+    } else text(ctx, `Enter: resume      Q: ${quit}`, W / 2, 418, 16, '#cfd4ff', 'center', 400);
   }
   if (waiting) overlay(ctx, 'WAITING', '#fff', touch ? 'for the other player...' : 'for the other player...   Esc: lobby');
   closeButton(ctx);
@@ -363,6 +457,9 @@ function drawToken(ctx: CanvasRenderingContext2D, kind: PickupKind, x: number, y
       ctx.beginPath(); ctx.arc(0, 0, 7.5, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(0, 0); ctx.lineTo(4, 2); ctx.stroke();
       break;
+    case 'haste': // lightning bolt
+      ctx.beginPath(); ctx.moveTo(2, -10); ctx.lineTo(-6, 1); ctx.lineTo(-1, 1); ctx.lineTo(-3, 10); ctx.lineTo(6, -2); ctx.lineTo(1, -2); ctx.closePath(); ctx.fill();
+      break;
     case 'life': // heart
       ctx.beginPath(); ctx.moveTo(0, 8);
       ctx.bezierCurveTo(-12, 0, -7, -9, 0, -3);
@@ -400,15 +497,20 @@ function backdrop(ctx: CanvasRenderingContext2D, t: number) {
   ctx.globalAlpha = 1;
 }
 
-export interface MenuView { row: number; t: number; setName: string; levelName: string; modeName: string }
+/** Vertical positions of the menu's rows and play button (view coordinates). */
+export const MENU_Y = { rows: 226, gap: 40, go: 420 };
+
+export interface MenuView { row: number; t: number; setName: string; levelName: string; gameMode: { id: Mode; name: string; hint: string }; playName: string }
 
 export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   backdrop(ctx, m.t);
   text(ctx, 'SPLITSTORM', W / 2, 110, 72, '#fff');
   text(ctx, 'pop them all. mind the little ones.', W / 2, 162, 16, '#cfd4ff', 'center', 400);
-  const rows = [`Levels:   <  ${m.setName}  >`, `Start at: <  ${m.levelName}  >`, `Play:     <  ${m.modeName}  >`];
-  rows.forEach((r, i) => text(ctx, r, W / 2, 250 + i * 44, 22, m.row === i ? '#ffd43b' : '#8a90c7'));
-  text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, 400, touch ? 26 : 22, '#8ce99a');
+  const rows = [`Levels:   <  ${m.setName}  >`, `Start at: <  ${m.levelName}  >`, `Mode:     <  ${m.gameMode.name}  >`, `Play:     <  ${m.playName}  >`];
+  rows.forEach((r, i) => text(ctx, r, W / 2, MENU_Y.rows + i * MENU_Y.gap, 22, m.row === i ? '#ffd43b' : '#8a90c7'));
+  const hint = m.gameMode.id === 'classic' ? '' : m.playName === '1 player' ? 'Needs 2 or more players (1 player plays Classic)' : m.gameMode.hint;
+  if (hint) text(ctx, hint, W / 2, MENU_Y.rows + 3.75 * MENU_Y.gap, 13, '#8a90c7', 'center', 400);
+  text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, MENU_Y.go, touch ? 26 : 22, '#8ce99a');
   text(ctx, touch ? 'Tap a row to change it' : 'P1: arrows + Space      P2: A / D + W      P: pause   Esc: menu', W / 2, H + 30, 14, '#8a90c7', 'center', 400);
 }
 
@@ -416,6 +518,8 @@ export interface LobbyView {
   role: 'host' | 'guest'; status: string; code: string; typed: string; msg: string;
   /** Who is in the room, e.g. "3 of 4 players in the room". */
   room: string;
+  modeName: string;
+  modeHint: string;
   link: string; copied: boolean; t: number; setName: string; levelName: string;
   /** Host: which settings row is selected. */
   row: number;
@@ -423,7 +527,7 @@ export interface LobbyView {
 }
 
 /** Vertical positions of the lobby's tappable lines (view coordinates). */
-export const LOBBY_Y = { link: 222, set: 322, level: 356, start: 446 };
+export const LOBBY_Y = { link: 222, set: 314, level: 344, mode: 374, start: 446 };
 
 export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   backdrop(ctx, v.t);
@@ -435,6 +539,8 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
       text(ctx, editable ? `${label} <  ${value}  >` : `${label} ${value}`, W / 2, y, 20, on ? '#ffd43b' : '#8a90c7');
     row('Levels:  ', v.setName, LOBBY_Y.set, editable && v.row === 0);
     row('Start at:', v.levelName, LOBBY_Y.level, editable && v.row === 1);
+    row('Mode:    ', v.modeName, LOBBY_Y.mode, editable && v.row === 2);
+    if (v.modeHint && v.modeName !== 'Classic') text(ctx, v.modeHint, W / 2, LOBBY_Y.mode + 26, 13, '#8a90c7', 'center', 400);
   };
   text(ctx, host ? 'HOST A GAME' : 'JOIN A GAME', W / 2, 62, 36);
   let foot = 'Esc: back', action = '';
@@ -465,11 +571,111 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   else {
     text(ctx, v.room || 'Connected', W / 2, 190, 24, '#8ce99a');
     sub(`Waiting for the host to start${dots}`, 235);
-    sub('The host has picked:', 286, '#8a90c7');
+    sub('The host has picked:', 282, '#8a90c7');
     settings(false);
   }
   if (touch) {
     text(ctx, action, W / 2, LOBBY_Y.start, 24, '#8ce99a');
     closeButton(ctx);
   } else text(ctx, foot, W / 2, H + 30, 14, '#8a90c7', 'center', 400);
+}
+
+/** Gun bearer (a harpoon held up, gold) or VIP (a crown) marker drawn over a player. */
+function drawRole(ctx: CanvasRenderingContext2D, role: 'gun' | 'vip' | '', x: number, y: number, tick: number, scale = 1) {
+  if (!role) return;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  const bob = Math.sin(tick * 0.15) * 1.5;
+  if (role === 'vip') {
+    ctx.fillStyle = '#ffd43b';
+    ctx.strokeStyle = '#7a5a00';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-11, -6 + bob); ctx.lineTo(-11, -17 + bob); ctx.lineTo(-5, -11 + bob); ctx.lineTo(0, -20 + bob);
+    ctx.lineTo(5, -11 + bob); ctx.lineTo(11, -17 + bob); ctx.lineTo(11, -6 + bob); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ff6b6b';
+    ctx.beginPath(); ctx.arc(0, -10 + bob, 2, 0, Math.PI * 2); ctx.fill();
+  } else {
+    // a gold harpoon held over the shoulder, with a glow so it reads at a glance
+    ctx.shadowColor = '#ffd43b';
+    ctx.shadowBlur = 10;
+    ctx.strokeStyle = '#ffd43b';
+    ctx.fillStyle = '#ffd43b';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(12, 30); ctx.lineTo(12, -12 + bob); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(6, -8 + bob); ctx.lineTo(12, -20 + bob); ctx.lineTo(18, -8 + bob); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+export interface ResultsView { s: State; you: number; levels: Level[]; online: boolean; t: number }
+
+/** End-of-game stats: one row per player, best in each column picked out. */
+export function drawResults(ctx: CanvasRenderingContext2D, v: ResultsView) {
+  backdrop(ctx, v.t);
+  ctx.fillStyle = 'rgba(7,8,15,0.6)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const s = v.s, L = levelAt(s, v.levels);
+  let [title, col] = s.phase === 'won' ? ['YOU WIN', '#ffd43b'] : s.phase === 'over' ? ['GAME OVER', '#ff6b6b'] : ['GAME ENDED', '#fff'];
+  if (s.mode === 'versus') {
+    const top = Math.max(...s.players.map((p) => (p.lives > 0 ? p.wins : -1)));
+    const best = s.players.map((p, i) => (p.lives > 0 && p.wins === top ? i : -1)).filter((i) => i >= 0);
+    if (s.phase === 'won' && best.length === 1) [title, col] = [`${COLOR_NAMES[best[0]].toUpperCase()} WINS`, PLAYER_COL[best[0]]];
+  }
+  text(ctx, title, W / 2, 56, 44, col);
+  const mode = MODES.find((m) => m.id === s.mode)!.name;
+  text(ctx, s.mode === 'versus' ? `${mode}  -  ${s.level + 1} rounds played` : `${mode}  -  reached level ${s.level + 1}/${v.levels.length} (${L?.name ?? ''})  -  team score ${s.score}`, W / 2, 98, 15, '#cfd4ff', 'center', 400);
+
+  const time = (ticks: number) => { const sec = Math.round(ticks / 60); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`; };
+  const cols: { h: string; get: (i: number) => number; show: (n: number) => string; low?: boolean }[] = [
+    { h: 'Popped', get: (i) => s.players[i].st.pops, show: String },
+    { h: 'Points', get: (i) => s.players[i].st.score, show: String },
+    { h: 'Time alive', get: (i) => s.players[i].st.alive, show: time },
+    { h: 'Lives lost', get: (i) => s.players[i].st.deaths, show: String, low: true },
+    { h: 'Shots', get: (i) => s.players[i].st.shots, show: String },
+    { h: 'Pickups', get: (i) => s.players[i].st.picks, show: String },
+    ...(s.mode === 'versus' ? [{ h: 'Rounds won', get: (i: number) => s.players[i].wins, show: String }] : []),
+    ...(s.mode === 'revive' ? [{ h: 'Revives', get: (i: number) => s.players[i].st.revives, show: String }] : []),
+  ];
+  const x0 = 170, dx = (W - x0 - 40) / cols.length, top = 150;
+  cols.forEach((c, k) => text(ctx, c.h, x0 + dx * (k + 0.5), top, 14, '#8a90c7', 'center', 400));
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.fillRect(40, top + 16, W - 80, 1);
+  const n = s.players.length;
+  for (let i = 0; i < n; i++) {
+    const y = top + 48 + i * 46;
+    if (i === v.you) { ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fillRect(40, y - 20, W - 80, 40); }
+    const name = n === 1 ? 'You' : COLOR_NAMES[i][0].toUpperCase() + COLOR_NAMES[i].slice(1) + (i === v.you ? ' (you)' : '');
+    text(ctx, name, 56, y, 18, PLAYER_COL[i % PLAYER_COL.length], 'left');
+    cols.forEach((c, k) => {
+      const vals = s.players.map((_, j) => c.get(j));
+      const best = c.low ? Math.min(...vals) : Math.max(...vals);
+      const top1 = n > 1 && vals[i] === best && vals.filter((x) => x === best).length < n;
+      text(ctx, c.show(vals[i]), x0 + dx * (k + 0.5), y, 18, top1 ? '#ffd43b' : '#fff', 'center', top1 ? 700 : 400);
+    });
+  }
+  // awards
+  const P = s.players, name = (i: number) => (n === 1 ? 'You' : COLOR_NAMES[i][0].toUpperCase() + COLOR_NAMES[i].slice(1));
+  const argBest = (f: (i: number) => number, low = false) => {
+    let b = -1;
+    P.forEach((_, i) => { if (b < 0 || (low ? f(i) < f(b) : f(i) > f(b))) b = i; });
+    return b;
+  };
+  const awards: [string, string, number][] = [];
+  const reck = argBest((i) => P[i].st.danger);
+  if (P[reck].st.danger > 30) awards.push(['Most reckless', `${(P[reck].st.danger / 60).toFixed(1)} s within a hair of a ball`, reck]);
+  const shave = argBest((i) => P[i].st.shave, true);
+  if (P[shave].st.shave < 16) awards.push(['Closest shave', `${P[shave].st.shave.toFixed(1)} px from disaster`, shave]);
+  const acc = (i: number) => (P[i].st.shots >= 10 ? P[i].st.pops / P[i].st.shots : 0);
+  const sharp = argBest(acc);
+  if (acc(sharp) > 0) awards.push(['Sharpshooter', `${Math.round(acc(sharp) * 100)} pops per 100 shots`, sharp]);
+  awards.slice(0, 3).forEach(([t, d, i], k) => {
+    const x = W / 2 + (k - (Math.min(3, awards.length) - 1) / 2) * 300;
+    text(ctx, t.toUpperCase(), x, 392, 12, '#8a90c7');
+    text(ctx, name(i), x, 414, 18, PLAYER_COL[i % PLAYER_COL.length]);
+    text(ctx, d, x, 436, 12, '#cfd4ff', 'center', 400);
+  });
+  text(ctx, touch ? 'TAP TO CONTINUE' : `Enter: back to the ${v.online ? 'lobby' : 'menu'}`, W / 2, H + 20, touch ? 22 : 16, '#8ce99a');
 }

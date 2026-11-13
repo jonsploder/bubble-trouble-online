@@ -65,15 +65,25 @@
     await press(F[1], 'Escape');
     await until('paused again', () => S[1].predicted.paused, 6000);
     await press(F[1], 'KeyQ'); // a guest quits
+    await until('everyone sees results', () => F.every((f) => dbg(f).screen === 'results'), 10000);
+    for (const f of F) await press(f, 'Enter');
     await until('all back in lobby', () => F.every((f) => dbg(f).screen === 'lobby'), 10000);
-    steps.push('guest quit -> everyone back in lobby');
+    steps.push('guest quit -> everyone saw results -> lobby');
+    // switch to One Gun for the second game
+    await press(A, 'ArrowDown'); await press(A, 'ArrowDown'); await press(A, 'ArrowRight');
+    await until('guests see One Gun', () => F.slice(1).every((g) => dbg(g).net.hostMode === 1));
 
     S = await playOnce('game 2');
+    const armed = S.map((s) => s.predicted.players.filter((p) => p.armed).length);
+    if (S.some((s) => s.predicted.mode !== 'onegun') || armed.some((n) => n !== 1)) throw new Error('One Gun mode not in effect: ' + armed);
+    const holder = S.map((s) => s.predicted.players.findIndex((p) => p.armed));
+    if (new Set(holder).size !== 1) throw new Error('players disagree on who has the gun');
+    steps.push(`game 2 is One Gun; player ${holder[0] + 1} holds the gun on every screen`);
     await press(A, 'Escape');
     await until('paused', () => S[0].predicted.paused, 6000);
     await press(A, 'KeyQ'); // host quits
-    await until('all back in lobby again', () => F.every((f) => dbg(f).screen === 'lobby'), 10000);
-    steps.push('host quit -> everyone back in lobby');
+    await until('everyone sees results again', () => F.every((f) => dbg(f).screen === 'results'), 10000);
+    steps.push('host quit -> everyone saw results');
     finish({ ok: true, steps, stats: S.map((s) => ({ rollbacks: s.stats.rollbacks, stalled: s.stats.stalled, slowed: s.stats.slowed })) });
   } catch (e) {
     finish({ ok: false, error: String(e), steps, state: F.map((f) => dbg(f) && ({ screen: dbg(f).screen, status: dbg(f).net.status, seat: dbg(f).net.seat, seats: dbg(f).net.room?.seats(), msg: dbg(f).net.msg })) });

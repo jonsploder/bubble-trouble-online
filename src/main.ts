@@ -2,16 +2,16 @@ import { playEvents, unlockAudio } from './audio';
 import { SETS } from './levels';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
-import { CLOSE_BTN, LOBBY_Y, VIEW_H, VIEW_W, drawGame, drawLobby, drawMenu, drawRotate, fxEvents, setTouch } from './render';
+import { CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, drawGame, drawLobby, drawMenu, drawResults, drawRotate, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
-import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, newGame, step } from './sim';
-import type { GameEvent, Level, State } from './sim';
+import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
+import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 8;
-/** Trace collector (see worker/). Empty = don't upload. */
-const TRACE_URL = (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
+const VERSION = 10;
+/** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
+const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -31,21 +31,24 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
 
 // ---------------------------------------------------------------- state
-type Screen = 'menu' | 'lobby' | 'game';
+type Screen = 'menu' | 'lobby' | 'game' | 'results';
 let screen: Screen = 'menu';
 let levels: Level[] = SETS[0].levels;
 let game: State | null = null; // local play
 let session: RollbackSession | null = null; // online play
 let sessionT0 = 0;
+let gameSet = 0; // level set of the local game
+/** End-of-game stats being shown, and where to go after. */
+let results: { s: State; set: number; you: number; online: boolean } | null = null;
 let pausePulse = false; // send IN_PAUSE on the next tick
 const keys = new Set<string>();
-const menu = { set: 0, level: 0, mode: 0, row: 0, t: 0 };
+const menu = { set: 0, level: 0, gmode: 0, mode: 0, row: 0, t: 0 }; // gmode: game mode (MODES), mode: how to play (PLAY_MODES)
 
 /** `seats` lists who is playing, in player order; `wait` is how long the recipient should hold off before starting. */
-type StartMsg = { t: 'start'; v: number; gid: number; set: number; level: number; seed: number; seats: number[]; wait: number };
+type StartMsg = { t: 'start'; v: number; gid: number; set: number; level: number; gm: Mode; seed: number; seats: number[]; wait: number };
 type LobbyStatus = 'opening' | 'waiting' | 'enter' | 'connecting' | 'connected' | 'error';
 type Msg = { t: string } & Record<string, unknown>;
-interface TraceMeta { version: number; gid: number; set: number; level: number; seed: number; date: string; inputDelay: number; players: number }
+interface TraceMeta { version: number; gid: number; set: number; level: number; seed: number; date: string; inputDelay: number; players: number; mode: Mode }
 
 const net = {
   role: 'host' as 'host' | 'guest',
@@ -61,6 +64,7 @@ const net = {
   row: 0, // host's selected settings row in the lobby
   hostSet: 0, // guest's view of what the host has picked
   hostLevel: 0,
+  hostMode: 0,
   gid: 0,
   lastGid: -1,
   pendingGid: -1,
@@ -148,8 +152,8 @@ function beginSession(m: StartMsg) {
   net.lastGid = m.gid;
   net.seats = m.seats;
   net.me = me;
-  net.meta = { version: VERSION, gid: m.gid, set: m.set, level: m.level, seed: m.seed, date: new Date().toISOString(), inputDelay: INPUT_DELAY, players: m.seats.length };
-  session = new RollbackSession(levels, me, newGame(levels, m.seats.length, m.level, m.seed), (to, msg) => room.send(m.seats[to], { ...msg, gid: m.gid }));
+  net.meta = { version: VERSION, gid: m.gid, set: m.set, level: m.level, seed: m.seed, date: new Date().toISOString(), inputDelay: INPUT_DELAY, players: m.seats.length, mode: m.gm };
+  session = new RollbackSession(levels, me, newGame(levels, m.seats.length, m.level, m.seed, m.gm), (to, msg) => room.send(m.seats[to], { ...msg, gid: m.gid }));
   sessionT0 = performance.now();
   acc = 0;
   pausePulse = false;
@@ -166,7 +170,7 @@ function hostStart() {
   const guests = room.seats().sort((a, b) => a - b);
   if (!guests.length) return;
   const lead = Math.max(...guests.map((g) => (net.rtt[g] ?? 150) / 2)) + 60;
-  const msg: StartMsg = { t: 'start', v: VERSION, gid: ++net.gid, set: menu.set, level: menu.level, seed: (Date.now() & 0x7fffffff) | 1, seats: [0, ...guests], wait: 0 };
+  const msg: StartMsg = { t: 'start', v: VERSION, gid: ++net.gid, set: menu.set, level: menu.level, gm: MODES[menu.gmode].id, seed: (Date.now() & 0x7fffffff) | 1, seats: [0, ...guests], wait: 0 };
   net.start = { msg, at: performance.now() + lead, waiting: new Set(guests) };
   room.setOpen(false);
   offerStart();
@@ -181,15 +185,43 @@ function offerStart() {
   }
 }
 
-/** Leave the current online game; everyone ends up back in the lobby. */
+/** Leave the current online game; everyone sees their stats, then ends up back in the lobby. */
 function endSession() {
-  if (session && net.meta) uploadLog(net.meta, net.me, session.finish());
+  if (session && net.meta) {
+    uploadLog(net.meta, net.me, session.finish());
+    uploadLevels(session.confirmed, net.meta.set, true);
+    showResults(session.confirmed, net.meta.set, net.me, true);
+  } else screen = 'lobby';
   session = null;
   net.start = null;
   net.room?.setOpen(true);
-  screen = 'lobby';
   if (net.role === 'host') net.status = net.room?.seats().length ? 'connected' : 'waiting';
   else net.status = 'connected';
+}
+
+function showResults(s: State, set: number, you: number, online: boolean) {
+  results = { s: JSON.parse(JSON.stringify(s)), set, you, online };
+  screen = 'results';
+  keys.clear();
+}
+
+function closeResults() {
+  screen = results?.online && net.room ? 'lobby' : 'menu';
+  results = null;
+}
+
+/** Report how each attempt at each level went, for the difficulty report. One upload per game. */
+function uploadLevels(s: State, set: number, online: boolean) {
+  if (!TRACE_URL || (online && net.me !== 0) || s.mode === 'versus') return; // online, player 1 speaks for everyone; versus arenas aren't levels
+  const hist = s.hist.slice();
+  if (s.phase === 'play' && s.lt > 300) hist.push([s.level, s.lt, 2, s.lost]); // gave up mid-attempt
+  if (!hist.length) return;
+  const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  fetch(`${TRACE_URL}/levels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ format: 'splitstorm-levels', v: 1, id, version: VERSION, set: SETS[set].id, players: s.players.length, mode: s.mode, online, hist }),
+  }).catch(() => {});
 }
 
 /** Send our part of a finished game's log to the trace collector. Best effort, never blocks play. */
@@ -212,6 +244,7 @@ function onMessage(seat: number, m: Msg) {
       room.send(0, { t: 'pong', ts: m.ts });
       net.hostSet = m.set as number;
       net.hostLevel = m.level as number;
+      net.hostMode = (m.gm as number) ?? 0;
       net.seat = m.you as number;
       net.roster = m.players as RosterEntry[];
       room.setRoster(net.seat, net.roster);
@@ -256,10 +289,10 @@ setInterval(() => {
   if (!room) return;
   beat++;
   offerStart();
-  if (screen !== 'lobby' || beat % 4 || net.start) return;
+  if ((screen !== 'lobby' && screen !== 'results') || beat % 4 || net.start) return;
   if (net.role === 'host') {
     const players = room.roster();
-    for (const g of room.seats()) room.send(g, { t: 'ping', ts: performance.now(), set: menu.set, level: menu.level, you: g, players, gid: net.gid });
+    for (const g of room.seats()) room.send(g, { t: 'ping', ts: performance.now(), set: menu.set, level: menu.level, gm: menu.gmode, you: g, players, gid: net.gid });
   } else {
     room.send(0, { t: 'gping', ts: performance.now(), left: net.lastGid });
   }
@@ -273,29 +306,32 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (screen === 'menu') menuKey(e.code);
   else if (screen === 'lobby') lobbyKey(e.code);
+  else if (screen === 'results') { if (e.code === 'Enter' || e.code === 'Escape' || e.code === 'Space') closeResults(); }
   else gameKey(e.code);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 
-/** Left/right on the "Levels" and "Start at" rows; shared by the menu and the host's lobby. */
+/** Left/right on the "Levels", "Start at" and "Mode" rows; shared by the menu and the host's lobby. */
 function changeSetting(row: number, d: number) {
   if (row === 0) { menu.set = (menu.set + d + SETS.length) % SETS.length; menu.level = 0; }
   if (row === 1) { const n = SETS[menu.set].levels.length; menu.level = (menu.level + d + n) % n; }
+  if (row === 2) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
 }
 
 function menuKey(code: string) {
-  if (code === 'ArrowUp') menu.row = (menu.row + 2) % 3;
-  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 3;
+  if (code === 'ArrowUp') menu.row = (menu.row + 3) % 4;
+  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 4;
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
-  if (d && menu.row < 2) changeSetting(menu.row, d);
-  if (d && menu.row === 2) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
+  if (d && menu.row < 3) changeSetting(menu.row, d);
+  if (d && menu.row === 3) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
   if (code === 'Enter' || code === 'Space') {
     if (menu.mode === 2) openHost();
     else if (menu.mode === 3) openJoin();
     else {
       levels = SETS[menu.set].levels;
-      game = newGame(levels, menu.mode + 1, menu.level, (Date.now() & 0x7fffffff) | 1);
+      gameSet = menu.set;
+      game = newGame(levels, menu.mode + 1, menu.level, (Date.now() & 0x7fffffff) | 1, MODES[menu.gmode].id);
       acc = 0;
       pausePulse = false;
       screen = 'game';
@@ -311,7 +347,8 @@ function lobbyKey(code: string) {
     return;
   }
   if (net.role === 'host') {
-    if (code === 'ArrowUp' || code === 'ArrowDown') net.row = 1 - net.row;
+    if (code === 'ArrowUp') net.row = (net.row + 2) % 3;
+    if (code === 'ArrowDown') net.row = (net.row + 1) % 3;
     const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
     if (d && !net.start) changeSetting(net.row, d);
     if (code === 'Enter' && net.status === 'connected') hostStart();
@@ -325,7 +362,11 @@ function lobbyKey(code: string) {
 
 function quitGame() {
   if (session) endSession();
-  else { game = null; screen = 'menu'; }
+  else if (game) {
+    uploadLevels(game, gameSet, false);
+    showResults(game, gameSet, -1, false);
+    game = null;
+  }
 }
 
 function gameKey(code: string) {
@@ -374,10 +415,11 @@ function tapUI(x: number, y: number): boolean {
   const near = (yy: number, r = 18) => Math.abs(y - yy) < r;
   const dir = x > VIEW_W / 2 ? 'ArrowRight' : 'ArrowLeft';
   if (screen === 'menu') {
-    for (let i = 0; i < 3; i++) if (near(250 + i * 44, 22)) { menu.row = i; menuKey(dir); }
-    if (near(400, 34)) menuKey('Enter');
+    for (let i = 0; i < 4; i++) if (near(MENU_Y.rows + i * MENU_Y.gap, 20)) { menu.row = i; menuKey(dir); }
+    if (near(MENU_Y.go, 30)) menuKey('Enter');
     return true;
   }
+  if (screen === 'results') { closeResults(); return true; }
   if (screen === 'lobby') {
     if (close) lobbyKey('Escape');
     else if (net.status === 'error') lobbyKey('Enter');
@@ -385,6 +427,7 @@ function tapUI(x: number, y: number): boolean {
       if (near(LOBBY_Y.link, 30) && net.code) shareInvite();
       else if (near(LOBBY_Y.set)) { net.row = 0; lobbyKey(dir); }
       else if (near(LOBBY_Y.level)) { net.row = 1; lobbyKey(dir); }
+      else if (near(LOBBY_Y.mode)) { net.row = 2; lobbyKey(dir); }
       else if (y > LOBBY_Y.start - 24) lobbyKey('Enter');
     } else if (net.status === 'enter') {
       const typed = (window.prompt('Room code (4 letters)') ?? '').trim();
@@ -456,6 +499,10 @@ function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (screen !== 'game') pointers.clear();
+  if (screen === 'results' && results) {
+    menu.t += dt;
+    drawResults(ctx, { s: results.s, you: results.you, levels: SETS[results.set].levels, online: results.online, t: menu.t });
+  } else
   if (screen === 'game' && session) {
     // `rate` nudges our clock toward the other players', and eases off if someone goes quiet
     acc = Math.min(acc + dt * session.rate, DT * 4);
@@ -467,7 +514,7 @@ function frame(now: number) {
     const s = session.predicted;
     const waiting = session.stalled && session.silence > 20;
     const status = session.desync ? 'OUT OF SYNC - restart the game' : `online  ${session.frame - session.confirmedFrame}f`;
-    drawGame(ctx, s, levels[s.level], levels.length, dt, waiting, { you: net.me, status });
+    drawGame(ctx, s, levelAt(s, levels), levels.length, dt, waiting, { you: net.me, status });
     if (session.silence > 600) { if (net.role === 'host') endSession(); else fail('Connection lost.'); }
   } else if (screen === 'game' && game) {
     acc += dt;
@@ -476,7 +523,7 @@ function frame(now: number) {
       step(game, readInputs(game.players.length), levels, events);
     }
     if (events.length) { playEvents(events); fxEvents(events); events.length = 0; }
-    drawGame(ctx, game, levels[game.level], levels.length, game.paused ? 0 : dt, false);
+    drawGame(ctx, game, levelAt(game, levels), levels.length, game.paused ? 0 : dt, false);
   } else if (screen === 'lobby') {
     menu.t += dt;
     const host = net.role === 'host';
@@ -486,11 +533,12 @@ function frame(now: number) {
       role: net.role, status: net.status, code: net.code, typed: net.typed, msg: net.msg,
       link: net.code ? inviteLink() : '', copied: net.copied, t: menu.t, row: net.row, starting: !!net.start,
       setName: set.name, levelName: `${lvl + 1}. ${set.levels[lvl]?.name ?? ''}`, room: roomLine(),
+      modeName: MODES[host ? menu.gmode : net.hostMode]?.name ?? '', modeHint: MODES[host ? menu.gmode : net.hostMode]?.hint ?? '',
     });
   } else {
     menu.t += dt;
     const set = SETS[menu.set];
-    drawMenu(ctx, { row: menu.row, t: menu.t, setName: set.name, levelName: `${menu.level + 1}. ${set.levels[menu.level].name}`, modeName: PLAY_MODES[menu.mode] });
+    drawMenu(ctx, { row: menu.row, t: menu.t, setName: set.name, levelName: `${menu.level + 1}. ${set.levels[menu.level].name}`, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode] });
   }
   if (portrait()) drawRotate(ctx);
   requestAnimationFrame(frame);
@@ -514,6 +562,7 @@ if (jump) {
     menu.set = si;
     menu.level = +jump[2] - 1;
     levels = SETS[si].levels;
+    gameSet = si;
     game = newGame(levels, 1, menu.level, 12345);
     screen = 'game';
   }

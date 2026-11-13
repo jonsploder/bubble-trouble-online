@@ -367,7 +367,120 @@ export const HARD: Level[] = [
   },
 ];
 
+// Twists: portals, three- and four-way splits, runaway speed and drops you don't want.
+//  portals: [ax, ay, bx, by] pairs; a ball entering one comes out of the other
+//  split:   pieces per pop (level-wide, or per ball)
+//  playerSpeed / 'haste' drops: you run faster than you'd like
+export const TWISTS: Level[] = [
+  {
+    name: 'Wormhole',
+    hint: 'What goes in the orange portal comes out the blue one.',
+    time: 70,
+    start: [480, 400],
+    portals: [[150, 330, 810, 150]],
+    balls: [{ x: 300, y: 200, size: 3, dir: -1 }],
+  },
+  {
+    name: 'Triplets',
+    hint: 'These split three ways. The middle one bounces straight up and down.',
+    time: 80,
+    split: 3,
+    start: [200, 140],
+    balls: [{ x: 600, y: 190, size: 3, dir: -1 }],
+  },
+  {
+    name: 'Too Much Coffee',
+    hint: 'Lightning drops make you run far too fast. Try not to step on them.',
+    time: 80,
+    drops: ['haste', 'haste', 'haste', 'time'],
+    dropRate: 0.4,
+    balls: [
+      { x: 220, y: 200, size: 3, dir: 1 },
+      { x: 740, y: 200, size: 3, dir: -1 },
+    ],
+  },
+  {
+    name: 'Butterfingers',
+    hint: 'Every drop is a curse. Don\'t touch them.',
+    time: 90,
+    weapon: 'twin',
+    drops: ['beam', 'pulse', 'haste', 'beam', 'pulse'],
+    dropRate: 0.45,
+    start: [480, 420],
+    balls: [
+      { x: 160, y: 230, size: 2, dir: 1 },
+      { x: 360, y: 190, size: 3, dir: 1 },
+      { x: 600, y: 190, size: 3, dir: -1 },
+      { x: 800, y: 230, size: 2, dir: -1 },
+    ],
+  },
+  {
+    name: 'Hall of Mirrors',
+    time: 100,
+    start: [110, 60],
+    rects: [{ x: 472, y: 0, w: 16, h: 480, gate: 1 }],
+    portals: [[240, 120, 720, 380], [380, 400, 860, 110]],
+    balls: [
+      { x: 260, y: 260, size: 3, dir: 1, group: 1 },
+      { x: 700, y: 200, size: 3, dir: -1 },
+    ],
+  },
+  {
+    name: 'Quadruplets',
+    hint: 'Four ways now.',
+    time: 90,
+    split: 4,
+    start: [480, 400],
+    balls: [
+      { x: 200, y: 220, size: 2, dir: 1 },
+      { x: 760, y: 220, size: 2, dir: -1 },
+    ],
+  },
+  {
+    name: 'Express',
+    hint: 'You\'re fast. Too fast.',
+    time: 80,
+    playerSpeed: 1.7,
+    ceiling: { speed: 6, lift: 8 },
+    balls: [
+      { x: 180, y: 240, size: 2, dir: 1, fast: true },
+      { x: 480, y: 180, size: 3, dir: -1 },
+      { x: 780, y: 240, size: 2, dir: -1, fast: true },
+    ],
+  },
+  {
+    name: 'Do Not Touch',
+    hint: 'Three-way splits, and every drop is the wrong gun.',
+    time: 110,
+    split: 3,
+    drops: ['beam', 'pulse'],
+    dropRate: 0.35,
+    start: [80, 140],
+    balls: [
+      { x: 480, y: 200, size: 3, dir: 1 },
+      { x: 760, y: 260, size: 1, dir: -1, fast: true },
+    ],
+  },
+  {
+    name: 'Chaos Theory',
+    hint: 'Everything at once.',
+    time: 150,
+    split: 3,
+    ramp: 0.004,
+    portals: [[120, 140, 840, 140]],
+    drops: ['haste', 'shield', 'twin', 'beam', 'time', 'life'],
+    dropRate: 0.25,
+    start: [400, 560],
+    balls: [
+      { x: 300, y: 220, size: 3, dir: 1 },
+      { x: 660, y: 220, size: 3, dir: -1, split: 2 },
+      { x: 480, y: 330, size: 1, dir: 1, fast: true },
+    ],
+  },
+];
+
 export const SETS = [
   { id: 'campaign', name: 'Campaign', levels: CAMPAIGN },
   { id: 'hard', name: 'Hard mode', levels: HARD },
+  { id: 'twists', name: 'Twists', levels: TWISTS },
 ];

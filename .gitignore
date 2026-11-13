@@ -6,3 +6,5 @@ worker/.wrangler
 worker/.dev.vars
 traces/*
 !traces/synthetic-webrtc-70ms.json
+stats/
+report/

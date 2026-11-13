@@ -32,6 +32,11 @@ export function playEvents(ev: GameEvent[]) {
       case 'pickup': blip(660, 0.08, 'sine', 0.08, 400); break;
       case 'shield': blip(300, 0.2, 'sawtooth', 0.06, -200); break;
       case 'die': blip(220, 0.5, 'sawtooth', 0.09, -180); break;
+      case 'handoff': blip(392, 0.1, 'triangle', 0.08, 300); setTimeout(() => blip(587, 0.15, 'triangle', 0.08), 100); break;
+      case 'send': blip(700, 0.12, 'square', 0.04, -400); break;
+      case 'portal': blip(260, 0.18, 'sine', 0.06, 500); break;
+      case 'revive': blip(523, 0.1, 'triangle', 0.08, 200); setTimeout(() => blip(880, 0.2, 'triangle', 0.08), 100); break;
+      case 'haste': blip(1200, 0.15, 'sawtooth', 0.04, 800); break;
       case 'gate': blip(140, 0.3, 'square', 0.06, 200); break;
       case 'clear': blip(523, 0.12, 'sine', 0.09); setTimeout(() => blip(784, 0.25, 'sine', 0.09), 120); break;
       case 'start': blip(440, 0.08, 'sine', 0.05); break;
