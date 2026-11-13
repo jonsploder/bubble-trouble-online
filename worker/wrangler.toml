@@ -1,0 +1,20 @@
+# Trace collector for Splitstorm: accepts session logs from the game, stores them in Workers KV.
+# Deploys only to its own *.workers.dev address: no routes, no custom domains, nothing shared
+# with other sites on the account. Free plan only: going over the free limits fails requests,
+# it does not bill.
+# Deploy from this folder (needs Node 20+):
+#   npx wrangler secret put READ_KEY        (any long random string; also goes in ../.env.local)
+#   npx wrangler deploy
+name = "splitstorm-traces"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+workers_dev = true
+
+[vars]
+# Only pages served from these origins may upload.
+ALLOWED_ORIGINS = "https://jonsploder.github.io,http://localhost:5173"
+
+# Workers KV (free tier, no card needed). Created with: npx wrangler kv namespace create splitstorm-traces
+[[kv_namespaces]]
+binding = "TRACES"
+id = "1e580018e1f54046a9ca93bd454843a9"

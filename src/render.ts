@@ -46,6 +46,7 @@ export function drawRotate(ctx: CanvasRenderingContext2D) {
   text(ctx, 'TURN YOUR PHONE SIDEWAYS', W / 2, VIEW_H / 2, 54, '#ffd43b');
 }
 let shake = 0;
+let otherX = 0; // smoothed draw position of the remote player
 
 export function fxEvents(ev: GameEvent[]) {
   for (const e of ev) {
@@ -88,7 +89,7 @@ function background(ctx: CanvasRenderingContext2D) {
   ctx.stroke();
 }
 
-export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, total: number, dt: number, banner: '' | 'pause' | 'wait' = '', net?: { you: number; status: string }) {
+export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, total: number, dt: number, waiting = false, net?: { you: number; status: string }) {
   ctx.save();
   if (shake > 0) {
     shake -= dt;
@@ -217,9 +218,17 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   }
 
   // players
-  s.players.forEach((p, i) => {
+  s.players.forEach((pl, i) => {
     if (s.phase === 'dead' && s.phaseT % 10 < 5) return;
-    if (p.invuln > 0 && p.invuln % 8 < 4) return;
+    if (pl.invuln > 0 && pl.invuln % 8 < 4) return;
+    // Online, the other player's position is a prediction that gets corrected. Ease toward
+    // it instead of snapping, so corrections read as a quick slide rather than a teleport.
+    let px = pl.x;
+    if (net && i !== net.you) {
+      if (s.phase !== 'play' || Math.abs(px - otherX) > 160) otherX = px;
+      else { otherX += (px - otherX) * 0.4; px = otherX; }
+    }
+    const p = { x: px, face: pl.face, shield: pl.shield };
     const col = PLAYER_COL[i % PLAYER_COL.length];
     const x = p.x - PW / 2, y = H - PH;
     ctx.fillStyle = col;
@@ -286,8 +295,15 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   } else if (s.phase === 'clear') text(ctx, 'CLEAR!', W / 2, 200, 48, '#8ce99a');
   else if (s.phase === 'over') overlay(ctx, 'GAME OVER', '#ff6b6b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
   else if (s.phase === 'won') overlay(ctx, 'YOU WIN', '#ffd43b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
-  if (banner === 'pause') overlay(ctx, 'PAUSED', '#fff', 'P: resume   Esc: menu');
-  if (banner === 'wait') overlay(ctx, 'WAITING', '#fff', touch ? 'for the other player...' : 'for the other player...   Esc: lobby');
+  if (s.paused) {
+    const quit = net ? 'quit to lobby' : 'quit to menu';
+    overlay(ctx, 'PAUSED', '#fff', touch ? '' : `Enter: resume      Q: ${quit}`);
+    if (touch) {
+      text(ctx, 'RESUME', W * 0.3, 280, 30, '#8ce99a');
+      text(ctx, 'QUIT', W * 0.7, 280, 30, '#ff8787');
+    } else if (net) text(ctx, 'Paused for both players', W / 2, 295, 14, '#8a90c7', 'center', 400);
+  }
+  if (waiting) overlay(ctx, 'WAITING', '#fff', touch ? 'for the other player...' : 'for the other player...   Esc: lobby');
   closeButton(ctx);
 }
 
@@ -394,44 +410,62 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
 export interface LobbyView {
   role: 'host' | 'guest'; status: string; code: string; typed: string; msg: string; rtt: number;
   link: string; copied: boolean; t: number; setName: string; levelName: string;
+  /** Host: which settings row is selected. */
+  row: number;
+  starting: boolean;
+  /** Host: description of recorded session logs, or '' if there are none. */
+  logInfo: string;
 }
+
+/** Vertical positions of the lobby's tappable lines (view coordinates). */
+export const LOBBY_Y = { link: 222, set: 322, level: 356, log: 398, start: 446 };
 
 export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   backdrop(ctx, v.t);
   const dots = '.'.repeat(1 + (Math.floor(v.t * 2) % 3));
   const sub = (s: string, y: number, c = '#cfd4ff') => text(ctx, s, W / 2, y, 16, c, 'center', 400);
-  text(ctx, v.role === 'host' ? 'HOST A GAME' : 'JOIN A GAME', W / 2, 80, 40);
-  let foot = 'Esc: back';
+  const host = v.role === 'host';
+  const settings = (editable: boolean) => {
+    const row = (label: string, value: string, y: number, on: boolean) =>
+      text(ctx, editable ? `${label} <  ${value}  >` : `${label} ${value}`, W / 2, y, 20, on ? '#ffd43b' : '#8a90c7');
+    row('Levels:  ', v.setName, LOBBY_Y.set, editable && v.row === 0);
+    row('Start at:', v.levelName, LOBBY_Y.level, editable && v.row === 1);
+  };
+  text(ctx, host ? 'HOST A GAME' : 'JOIN A GAME', W / 2, 62, 36);
+  let foot = 'Esc: back', action = '';
   if (v.status === 'error') {
     text(ctx, v.msg, W / 2, 220, 20, '#ff6b6b');
     foot = 'Enter: try again   Esc: back';
-  } else if (v.role === 'host') {
+    action = 'Tap to try again';
+  } else if (host) {
     if (v.status === 'opening') sub(`Opening a room${dots}`, 220);
     else {
-      sub('Room code', 150);
-      text(ctx, v.code.split('').join(' '), W / 2, 205, 64, '#ffd43b');
-      sub(v.link, 262, '#8a90c7');
-      sub(v.copied ? 'Invite link copied.' : touch ? 'Tap here to share the invite link' : 'C: copy invite link', 290, v.copied ? '#8ce99a' : '#cfd4ff');
+      sub('Room code', 104);
+      text(ctx, v.code.split('').join(' '), W / 2, 150, 56, '#ffd43b');
+      sub(v.link, LOBBY_Y.link - 14, '#8a90c7');
+      sub(v.copied ? 'Invite link copied.' : touch ? 'Tap here to share the invite link' : 'C: copy invite link', LOBBY_Y.link + 10, v.copied ? '#8ce99a' : '#cfd4ff');
       if (v.status === 'connected') {
-        text(ctx, `Friend connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 345, 20, '#8ce99a');
-        sub(`${v.setName}  -  ${v.levelName}`, 378);
-        foot = 'Enter: start   Esc: close room';
-      } else sub(`Waiting for your friend${dots}`, 345);
+        text(ctx, v.starting ? `Starting${dots}` : `Friend connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 278, 20, '#8ce99a');
+        foot = 'Up/Down, Left/Right: change level   Enter: start   Esc: close room';
+        action = 'TAP HERE TO START';
+      } else sub(`Waiting for your friend${dots}`, 278);
+      settings(true);
+      if (v.logInfo) sub(`${touch ? 'Tap' : 'L'}: save ${v.logInfo}`, LOBBY_Y.log, '#8a90c7');
     }
   } else if (v.status === 'enter') {
     sub('Type the room code', 150);
     text(ctx, (v.typed + '____').slice(0, 4).split('').join(' '), W / 2, 215, 64, '#ffd43b');
     foot = v.typed.length === 4 ? 'Enter: connect   Esc: back' : 'Esc: back';
+    action = 'Tap to type the code';
   } else if (v.status === 'connecting') sub(`Connecting to room ${v.code}${dots}`, 220);
   else {
-    text(ctx, `Connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 205, 24, '#8ce99a');
-    sub(`Waiting for the host to start${dots}`, 250);
+    text(ctx, `Connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 190, 24, '#8ce99a');
+    sub(`Waiting for the host to start${dots}`, 235);
+    sub('The host has picked:', 286, '#8a90c7');
+    settings(false);
   }
   if (touch) {
-    foot = v.status === 'error' ? 'Tap to try again' : v.role === 'host' && v.status === 'connected' ? 'TAP HERE TO START' : v.status === 'enter' ? 'Tap to type the code' : '';
-    text(ctx, foot, W / 2, 430, 24, '#8ce99a');
+    text(ctx, action, W / 2, LOBBY_Y.start, 24, '#8ce99a');
     closeButton(ctx);
-    return;
-  }
-  text(ctx, foot, W / 2, H + 30, 14, '#8a90c7', 'center', 400);
+  } else text(ctx, foot, W / 2, H + 30, 14, '#8a90c7', 'center', 400);
 }

@@ -1,0 +1,62 @@
+<!doctype html>
+<!-- Dev-only end-to-end check: two copies of the real game in iframes. Host opens a room,
+     guest joins by invite link, host changes level and starts, they play, pause, resume,
+     quit, and the guest's session log is transferred to the host. ?report=URL to POST result. -->
+<meta charset="utf-8" />
+<style>body{margin:0;background:#000} iframe{width:640px;height:360px;border:0}</style>
+<iframe id="a" src="/index.html"></iframe><iframe id="b"></iframe>
+<pre id="out">running</pre>
+<script type="module">
+  const report = new URLSearchParams(location.search).get('report');
+  const A = document.getElementById('a'), B = document.getElementById('b');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const key = (f, code, type = 'keydown') => f.contentWindow.dispatchEvent(new f.contentWindow.KeyboardEvent(type, { code, bubbles: true }));
+  const press = async (f, code, hold = 30) => { key(f, code); await sleep(hold); key(f, code, 'keyup'); await sleep(30); };
+  const dbg = (f) => f.contentWindow.__dbg;
+  const until = async (what, fn, ms = 20000) => { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout: ' + what); await sleep(50); } };
+  const steps = [];
+  try {
+    await until('host page', () => dbg(A));
+    await press(A, 'ArrowUp'); await press(A, 'ArrowRight'); await press(A, 'ArrowRight'); // Play: Host online game
+    await press(A, 'Enter');
+    await until('room code', () => dbg(A).net.code && dbg(A).net.status === 'waiting');
+    steps.push('room ' + dbg(A).net.code);
+    B.src = '/index.html#' + dbg(A).net.code;
+    await until('guest connected', () => dbg(B) && dbg(B).net.status === 'connected' && dbg(A).net.status === 'connected');
+    steps.push('linked');
+    await press(A, 'ArrowRight'); // host switches to Hard mode in the lobby
+    await until('guest sees host setting', () => dbg(B).net.hostSet === 1);
+    steps.push('lobby settings synced');
+    await press(A, 'ArrowLeft');
+    await press(A, 'Enter');
+    await until('both in game', () => dbg(A).session && dbg(B).session);
+    steps.push('started');
+    for (let i = 0; i < 12; i++) { await press(A, i % 2 ? 'ArrowLeft' : 'ArrowRight', 250); await press(B, i % 3 ? 'ArrowRight' : 'Space', 200); }
+    const sa = dbg(A).session, sb = dbg(B).session;
+    steps.push(`frames ${sa.frame}/${sb.frame} confirmed ${sa.confirmedFrame}/${sb.confirmedFrame}`);
+    if (sa.desync || sb.desync) throw new Error('desync');
+    if (sa.confirmedFrame < 200) throw new Error('game not advancing');
+    await press(B, 'Escape'); // guest pauses
+    await until('paused for both', () => sa.predicted.paused && sb.predicted.paused, 5000);
+    steps.push('paused for both');
+    await press(A, 'Enter'); // host resumes
+    await until('resumed for both', () => !sa.predicted.paused && !sb.predicted.paused, 5000);
+    steps.push('resumed');
+    await press(A, 'Escape');
+    await until('paused again', () => sa.predicted.paused, 5000);
+    await press(A, 'KeyQ'); // host quits to lobby
+    await until('both back in lobby', () => dbg(A).screen === 'lobby' && dbg(B).screen === 'lobby', 8000);
+    steps.push('both back in lobby');
+    await until('guest log transferred', () => dbg(A).net.logs.length === 1 && dbg(A).net.logs[0].peers[1], 15000);
+    const log = dbg(A).net.logs[0];
+    steps.push(`log complete: host ${log.peers[0].tick.length} ticks, guest ${log.peers[1].tick.length} ticks`);
+    const stats = log.peers.map((p) => p.end.stats);
+    const res = { ok: true, steps, stats, trace: { format: 'splitstorm-trace', v: 1, sessions: dbg(A).net.logs } };
+    document.getElementById('out').textContent = JSON.stringify({ ...res, trace: undefined }, null, 1);
+    if (report) fetch(report, { method: 'POST', mode: 'no-cors', body: JSON.stringify(res) });
+  } catch (e) {
+    const res = { ok: false, error: String(e), steps };
+    document.getElementById('out').textContent = JSON.stringify(res, null, 1);
+    if (report) fetch(report, { method: 'POST', mode: 'no-cors', body: JSON.stringify(res) });
+  }
+</script>

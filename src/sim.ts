@@ -30,6 +30,8 @@ const SPIKE = 8;
 export const IN_LEFT = 1;
 export const IN_RIGHT = 2;
 export const IN_FIRE = 4;
+/** Sent for a single tick: toggles pause for everyone. */
+export const IN_PAUSE = 8;
 
 export type Weapon = 'harpoon' | 'twin' | 'anchor' | 'pulse' | 'beam';
 export type PickupKind = Weapon | 'shield' | 'slow' | 'time' | 'life';
@@ -79,6 +81,7 @@ export type Phase = 'ready' | 'play' | 'dead' | 'clear' | 'over' | 'won';
 
 export interface State {
   tick: number;
+  paused: boolean;
   rng: number;
   level: number;
   phase: Phase;
@@ -131,7 +134,7 @@ function rand(s: State): number {
 
 export function newGame(levels: Level[], numPlayers: number, startLevel = 0, seed = 1234567): State {
   const s: State = {
-    tick: 0, rng: seed | 0, level: startLevel, phase: 'ready', phaseT: 0, lives: 3, score: 0,
+    tick: 0, paused: false, rng: seed | 0, level: startLevel, phase: 'ready', phaseT: 0, lives: 3, score: 0,
     timeLeft: 0, ceilY: 0, speed: 1, slowT: 0, lt: 0, grav: 1, balls: [], rects: [], shots: [], pickups: [],
     players: [],
   };
@@ -349,7 +352,12 @@ function applyPickup(s: State, p: Player, kind: PickupKind, L: Level) {
 }
 
 export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[]) {
+  // Pause travels through the inputs like everything else, so it stays in sync online.
+  let pauseHit = false;
+  for (const i of inputs) if (i & IN_PAUSE) pauseHit = true;
+  if (pauseHit && s.phase !== 'over' && s.phase !== 'won') s.paused = !s.paused;
   s.tick++;
+  if (s.paused) return;
   const L = levels[s.level];
   switch (s.phase) {
     case 'ready':

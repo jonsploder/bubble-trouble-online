@@ -1,2 +1,8 @@
 node_modules
 dist
+.env.local
+traces/.halves
+worker/.wrangler
+worker/.dev.vars
+traces/*
+!traces/synthetic-webrtc-70ms.json

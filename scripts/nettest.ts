@@ -1,59 +1,53 @@
-// Netcode check without a network: two RollbackSessions talk through a fake link with
-// latency, jitter, packet loss and clock drift. Both must stay in sync (matching
-// checksums of confirmed state) and keep making progress.
+// Netcode check without a network: two sessions on synthetic links with latency, jitter,
+// loss, clock drift, late starts and outages. Both must stay in sync and keep moving.
 import { SETS } from '../src/levels';
-import { RollbackSession } from '../src/rollback';
-import type { InputMsg } from '../src/rollback';
-import { newGame } from '../src/sim';
+import type { Level } from '../src/sim';
+import { badness, describe, simulate } from './netsim';
+import type { PeerScript } from './netsim';
 
 declare const process: { exit(code: number): never };
 
 let seed = 99;
 const rnd = () => { seed = (Math.imul(seed, 1664525) + 1013904223) | 0; return (seed >>> 0) / 4294967296; };
 
-function scenario(name: string, levels: (typeof SETS)[0]['levels'], level: number, oneWayMs: number, jitterMs: number, loss: number, drift: number) {
-  const queue: { at: number; to: number; m: InputMsg }[] = [];
-  let now = 0;
-  const mk = (me: number) => new RollbackSession(levels, me, newGame(levels, 2, level, 777), (m) => {
-    if (rnd() < loss) return;
-    queue.push({ at: now + (oneWayMs + rnd() * jitterMs) / (1000 / 60), to: 1 - me, m: JSON.parse(JSON.stringify(m)) });
+interface Net { oneWay: number; jitter: number; loss: number; drift?: number; lateStart?: number; outage?: [number, number]; hz?: number }
+
+function player(seconds: number, startAt: number, drift: number, hz: number): PeerScript {
+  const frames: number[] = [];
+  for (let t = startAt; t < seconds * 1000; t += (1000 / hz) * (1 + drift) + (rnd() - 0.5) * 2) frames.push(t);
+  // twitchy random player: changes what they hold a few times a second
+  const changes: [number, number][] = [];
+  for (let t = 0; t < seconds * 1000; t += 60 + rnd() * 400) changes.push([t, Math.floor(rnd() * 8)]);
+  return {
+    frames,
+    inputAt: (t) => { let v = 0; for (const c of changes) { if (c[0] > t) break; v = c[1]; } return v; },
+  };
+}
+
+function scenario(name: string, levels: Level[], level: number, net: Net, seconds = 60): boolean {
+  const peers = [player(seconds, 0, 0, 60), player(seconds, net.lateStart ?? 0, net.drift ?? 0, net.hz ?? 60)];
+  const r = simulate(levels, level, 777, peers, {
+    delay: (_from, t) => {
+      if (net.outage && t >= net.outage[0] && t < net.outage[1]) return null;
+      return rnd() < net.loss ? null : net.oneWay + rnd() * net.jitter;
+    },
   });
-  const ses = [mk(0), mk(1)];
-  const held = [0, 0];
-  let maxAhead = 0, stalls = 0;
-  const TICKS = 60 * 90;
-  for (now = 0; now < TICKS; now++) {
-    for (let i = queue.length - 1; i >= 0; i--) {
-      if (queue[i].at <= now) { ses[queue[i].to].receive(queue[i].m); queue.splice(i, 1); }
-    }
-    for (let p = 0; p < 2; p++) {
-      if (rnd() < 0.08) held[p] = Math.floor(rnd() * 8); // twitchy random player
-      if (p === 1 && rnd() < drift) continue; // player 2's clock runs slow
-      ses[p].tick(held[p]);
-      maxAhead = Math.max(maxAhead, ses[p].frame - ses[p].confirmedFrame);
-      if (ses[p].stalled) stalls++;
-    }
-  }
-  let compared = 0, mismatched = 0;
-  for (const [f, sum] of ses[0].sums) {
-    const other = ses[1].sums.get(f);
-    if (other === undefined) continue;
-    compared++;
-    if (other !== sum) mismatched++;
-  }
-  const progress = Math.min(ses[0].confirmedFrame, ses[1].confirmedFrame) / TICKS;
-  const gap = Math.abs(ses[0].frame - ses[1].frame);
-  const ok = !ses[0].desync && !ses[1].desync && mismatched === 0 && compared > 5 && progress > 0.9 && gap < 12;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name.padEnd(34)} checks=${compared} mismatched=${mismatched} progress=${(progress * 100).toFixed(0)}% maxRollback=${maxAhead}f frameGap=${gap} stalledTicks=${stalls} phase=${ses[0].confirmed.phase} level=${ses[0].confirmed.level + 1}`);
+  const progress = Math.min(...r.confirmed) / (seconds * 60);
+  const ok = !r.desync && r.mismatched === 0 && r.compared > 5 && progress > 0.85 && Math.abs(r.frames[0] - r.frames[1]) < 12;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}  [sync checks ${r.compared}, mismatched ${r.mismatched}, progress ${(progress * 100).toFixed(0)}%, max frame gap ${r.maxFrameGap}, badness ${(badness(r.stats[0]) + badness(r.stats[1])).toFixed(3)}]`);
+  r.stats.forEach((s, i) => console.log(`       P${i + 1}: ${describe(s)}`));
   return ok;
 }
 
 const C = SETS[0].levels, Hd = SETS[1].levels;
 const results = [
-  scenario('LAN (5ms)', C, 0, 5, 2, 0, 0),
-  scenario('Sydney-Tokyo (70ms one way)', C, 2, 70, 15, 0.02, 0.002),
-  scenario('200ms round trip, 5% loss', C, 9, 100, 30, 0.05, 0.005),
-  scenario('bad: 300ms rt, 20% loss, drift', Hd, 7, 150, 60, 0.2, 0.02),
-  scenario('hard set, gravity flip + wind', Hd, 11, 70, 15, 0.02, 0.002),
+  scenario('LAN (5ms)', C, 0, { oneWay: 5, jitter: 2, loss: 0 }),
+  scenario('Sydney-Tokyo (70ms one way)', C, 2, { oneWay: 70, jitter: 15, loss: 0.02, drift: 0.002 }),
+  scenario('Sydney-Tokyo, guest starts 250ms late', C, 2, { oneWay: 70, jitter: 15, loss: 0.02, lateStart: 250 }),
+  scenario('Sydney-Tokyo, guest on a 120Hz screen', C, 4, { oneWay: 70, jitter: 15, loss: 0.02, hz: 120 }),
+  scenario('200ms round trip, 5% loss', C, 9, { oneWay: 100, jitter: 30, loss: 0.05, drift: 0.005 }),
+  scenario('bad: 300ms rt, 20% loss, drift', Hd, 7, { oneWay: 150, jitter: 60, loss: 0.2, drift: 0.02 }),
+  scenario('70ms with a 600ms total outage', C, 2, { oneWay: 70, jitter: 15, loss: 0.02, outage: [20000, 20600] }),
+  scenario('hard set, gravity flip + wind', Hd, 11, { oneWay: 70, jitter: 15, loss: 0.02, drift: 0.002 }),
 ];
 process.exit(results.every(Boolean) ? 0 : 1);

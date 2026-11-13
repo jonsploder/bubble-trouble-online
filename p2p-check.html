@@ -1,6 +1,9 @@
 <!doctype html>
 <!-- Dev-only: opens a host and a guest in one page, connects them through the real PeerJS
-     broker + WebRTC, and plays 10 seconds of rollback netcode between them. -->
+     broker + WebRTC, and plays rollback netcode between them for a while.
+       ?secs=20        how long to play
+       ?lag=70         add artificial one-way delay (ms) with some jitter
+       ?report=URL     POST the result (including a trace in the real format) to URL -->
 <meta charset="utf-8" />
 <pre id="out">running</pre>
 <script type="module">
@@ -8,33 +11,54 @@
   import { RollbackSession } from './src/rollback.ts';
   import { SETS } from './src/levels.ts';
   import { newGame } from './src/sim.ts';
+  const q = new URLSearchParams(location.search);
+  const secs = +(q.get('secs') ?? 10), lag = +(q.get('lag') ?? 0), report = q.get('report');
   const out = document.getElementById('out');
   const levels = SETS[0].levels;
-  const ses = [null, null];
-  const links = [null, null];
-  const report = new URLSearchParams(location.search).get('report'); // optional: URL to send the result to
+  const ses = [null, null], links = [null, null], t0 = [0, 0];
   const done = (o) => {
-    out.textContent = 'RESULT ' + JSON.stringify(o);
-    if (report) fetch(report + '?r=' + encodeURIComponent(JSON.stringify(o)), { mode: 'no-cors' }).catch(() => {});
+    out.textContent = 'RESULT ' + JSON.stringify({ ...o, trace: undefined });
+    if (report) fetch(report, { method: 'POST', mode: 'no-cors', body: JSON.stringify(o) }).catch(() => {});
   };
   const begin = () => {
     if (!links[0] || !links[1] || ses[0]) return;
-    for (const me of [0, 1]) ses[me] = new RollbackSession(levels, me, newGame(levels, 2, 0, 4242), (m) => links[me].send(m));
-    let n = 0;
-    const held = [0, 0];
-    const iv = setInterval(() => {
-      for (const me of [0, 1]) { if (Math.random() < 0.1) held[me] = Math.floor(Math.random() * 8); ses[me].tick(held[me]); }
-      if (++n < 600) return;
-      clearInterval(iv);
-      let compared = 0, mismatched = 0;
-      for (const [f, sum] of ses[0].sums) { const o = ses[1].sums.get(f); if (o !== undefined) { compared++; if (o !== sum) mismatched++; } }
-      done({ ok: compared > 2 && mismatched === 0 && !ses[0].desync && !ses[1].desync, compared, mismatched,
-             confirmed: [ses[0].confirmedFrame, ses[1].confirmedFrame], frames: [ses[0].frame, ses[1].frame] });
-    }, 1000 / 60);
+    const start = (me) => {
+      t0[me] = performance.now();
+      ses[me] = new RollbackSession(levels, me, newGame(levels, 2, 2, 4242), (m) => {
+        if (lag) setTimeout(() => links[me].send(m), lag + Math.random() * lag * 0.3); else links[me].send(m);
+      });
+      // drive it like the game loop does, with the session's own rate control
+      let last = performance.now(), acc = 0, held = 0;
+      const iv = setInterval(() => {
+        const now = performance.now();
+        acc = Math.min(acc + Math.min(0.1, (now - last) / 1000) * ses[me].rate, 4 / 60);
+        last = now;
+        while (acc >= 1 / 60) {
+          acc -= 1 / 60;
+          if (Math.random() < 0.06) held = Math.floor(Math.random() * 8);
+          ses[me].tick(held, now - t0[me]);
+        }
+        if (now - t0[me] < secs * 1000) return;
+        clearInterval(iv);
+        if (me === 0) setTimeout(finish, 300);
+      }, 1000 / 120);
+    };
+    start(0);
+    setTimeout(() => start(1), 120); // the guest starts a little late, like a real handshake might
+  };
+  const finish = () => {
+    let compared = 0, mismatched = 0;
+    for (const [f, sum] of ses[0].sums) { const o = ses[1].sums.get(f); if (o !== undefined) { compared++; if (o !== sum) mismatched++; } }
+    const trace = { format: 'splitstorm-trace', v: 1, sessions: [{
+      meta: { version: 0, gid: 1, set: 0, level: 2, seed: 4242, date: new Date().toISOString(), inputDelay: 2 },
+      peers: [ses[0].finish(), ses[1].finish()],
+    }] };
+    done({ ok: compared > 2 && mismatched === 0 && !ses[0].desync && !ses[1].desync, compared, mismatched,
+           confirmed: [ses[0].confirmedFrame, ses[1].confirmedFrame], frames: [ses[0].frame, ses[1].frame], trace });
   };
   const side = (me) => ({
     onOpen: (l) => { links[me] = l; begin(); },
-    onData: (m) => ses[me]?.receive(m),
+    onData: (m) => ses[me]?.receive(m, performance.now() - t0[me]),
     onClose: (r) => done({ ok: false, error: r, side: me }),
   });
   hostRoom({ ...side(0), onReady: (code) => joinRoom(code, side(1)) });
