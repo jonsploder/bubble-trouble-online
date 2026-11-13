@@ -197,10 +197,14 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
     drawToken(ctx, pk.kind, pk.x, pk.y - 3 + Math.sin(s.tick * 0.12 + pk.x) * 2, 14);
   }
 
-  // portals: orange in, blue out (both work both ways)
-  if (L.portals) {
-    L.portals.forEach(([ax, ay, bx, by]) => {
-      for (const [x, y, c] of [[ax, ay, '#ff922b'], [bx, by, '#4dabf7']] as [number, number, string][]) {
+  // portals: pairs are orange and blue (both work both ways); a chain is numbered 1 -> 2 -> 3 -> 1
+  const CHAIN_COL = ['#ff922b', '#cc5de8', '#4dabf7', '#51cf66', '#ffd43b'];
+  const portalList: [number, number, string, string][] = [];
+  (L.portals ?? []).forEach(([ax, ay, bx, by]) => { portalList.push([ax, ay, '#ff922b', ''], [bx, by, '#4dabf7', '']); });
+  (L.chain ?? []).forEach(([x, y], k) => portalList.push([x, y, CHAIN_COL[k % CHAIN_COL.length], String(k + 1)]));
+  if (portalList.length) {
+    portalList.forEach(([px, py, pc, label]) => {
+      for (const [x, y, c] of [[px, py, pc]] as [number, number, string][]) {
         ctx.save();
         ctx.translate(x, y);
         ctx.strokeStyle = c;
@@ -209,9 +213,10 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
         for (let k = 0; k < 3; k++) {
           ctx.globalAlpha = 0.9 - k * 0.25;
           ctx.lineWidth = 3 - k;
-          ctx.beginPath(); ctx.ellipse(0, 0, 20 - k * 5, 28 - k * 7, 0, s.tick * 0.08 + k, s.tick * 0.08 + k + Math.PI * 1.5); ctx.stroke();
+          ctx.beginPath(); ctx.ellipse(0, 0, 22 - k * 5, 34 - k * 8, 0, s.tick * 0.08 + k, s.tick * 0.08 + k + Math.PI * 1.5); ctx.stroke();
         }
         ctx.restore();
+        if (label) text(ctx, label, x, y + 1, 15, c);
       }
     });
   }
@@ -254,6 +259,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   }
 
   // balls
+  const splitsVary = s.balls.some((b) => b.split !== 2) || !!L.split || L.balls.some((b) => b.split !== undefined);
   for (const b of s.balls) {
     const r = RADII[b.size];
     const g = ctx.createRadialGradient(b.x - r * 0.35, b.y - r * 0.35, r * 0.1, b.x, b.y, r);
@@ -273,6 +279,14 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
       ctx.strokeStyle = a % 2 ? '#868e96' : '#dee2e6';
       ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(b.x, b.y, r - 2 - a * 4, 0, Math.PI * 2); ctx.stroke();
+    }
+    // how many pieces it splits into, when that isn't the usual two (or when the level mixes them)
+    if (b.size > 0 && splitsVary) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.85)';
+      ctx.shadowBlur = 4;
+      text(ctx, String(b.split), b.x, b.y + 1, Math.max(10, Math.min(26, r * 0.9)), b.split === 2 ? 'rgba(255,255,255,0.75)' : '#ffffff');
+      ctx.restore();
     }
   }
 
@@ -500,7 +514,10 @@ function backdrop(ctx: CanvasRenderingContext2D, t: number) {
 /** Vertical positions of the menu's rows and play button (view coordinates). */
 export const MENU_Y = { rows: 226, gap: 40, go: 420 };
 
-export interface MenuView { row: number; t: number; setName: string; levelName: string; gameMode: { id: Mode; name: string; hint: string }; playName: string }
+export interface MenuView {
+  /** The chosen mode needs more players than the chosen way of playing gives. */
+  blocked: boolean;
+  row: number; t: number; setName: string; levelName: string; gameMode: { id: Mode; name: string; hint: string }; playName: string }
 
 export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   backdrop(ctx, m.t);
@@ -508,9 +525,10 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   text(ctx, 'pop them all. mind the little ones.', W / 2, 162, 16, '#cfd4ff', 'center', 400);
   const rows = [`Levels:   <  ${m.setName}  >`, `Start at: <  ${m.levelName}  >`, `Mode:     <  ${m.gameMode.name}  >`, `Play:     <  ${m.playName}  >`];
   rows.forEach((r, i) => text(ctx, r, W / 2, MENU_Y.rows + i * MENU_Y.gap, 22, m.row === i ? '#ffd43b' : '#8a90c7'));
-  const hint = m.gameMode.id === 'classic' ? '' : m.playName === '1 player' ? 'Needs 2 or more players (1 player plays Classic)' : m.gameMode.hint;
+  const hint = m.gameMode.id === 'classic' ? '' : m.gameMode.hint;
   if (hint) text(ctx, hint, W / 2, MENU_Y.rows + 3.75 * MENU_Y.gap, 13, '#8a90c7', 'center', 400);
-  text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, MENU_Y.go, touch ? 26 : 22, '#8ce99a');
+  if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players: pick 2 players or play online`, W / 2, MENU_Y.go, 18, '#ff8787');
+  else text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, MENU_Y.go, touch ? 26 : 22, '#8ce99a');
   text(ctx, touch ? 'Tap a row to change it' : 'P1: arrows + Space      P2: A / D + W      P: pause   Esc: menu', W / 2, H + 30, 14, '#8a90c7', 'center', 400);
 }
 

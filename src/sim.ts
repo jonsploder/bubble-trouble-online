@@ -37,7 +37,7 @@ export type Weapon = 'harpoon' | 'twin' | 'anchor' | 'pulse' | 'beam';
 /** 'haste' is a curse: it makes you run much faster than you can control for a while. */
 export type PickupKind = Weapon | 'shield' | 'slow' | 'time' | 'life' | 'haste';
 
-export interface BallDef { x: number; y: number; size: number; dir: 1 | -1; fast?: boolean; group?: number; /** Pieces it pops into (default: the level's `split`, else 2). */ split?: number; /** Hits needed before it will pop; each hit punts it upward instead. */ armor?: number }
+export interface BallDef { x: number; y: number; size: number; dir: 1 | -1; fast?: boolean; group?: number; /** Pieces it pops into (default: the level's `split`, else 2). */ split?: number; /** Bounces straight up and down. */ still?: boolean; /** Hits needed before it will pop; each hit punts it upward instead. */ armor?: number }
 export interface RectDef {
   x: number; y: number; w: number; h: number; gate?: number;
   /** Slides back and forth by (dx, dy) over `period` seconds. Keep moving blocks above head height. */
@@ -69,8 +69,10 @@ export interface Level {
   spin?: number;
   /** The view is upside down for the whole level. Purely visual. */
   upsideDown?: boolean;
-  /** Pairs of linked portals [ax, ay, bx, by]: a ball entering one comes out of the other. */
+  /** Pairs of linked portals [ax, ay, bx, by]: a ball entering either comes out of the other. */
   portals?: number[][];
+  /** A one-way loop of numbered portals [[x, y], ...]: 1 leads to 2, 2 to 3, ..., the last back to 1. */
+  chain?: number[][];
   /** Pieces each ball pops into (2 normally; 3 or 4 make for crowded levels). */
   split?: number;
   /** Player running speed multiplier for the whole level. */
@@ -246,7 +248,7 @@ export function newGame(levels: Level[], numPlayers: number, startLevel = 0, see
 
 function loadLevel(s: State, levels: Level[]) {
   const L = levelAt(s, levels);
-  s.balls = L.balls.map((b) => ({ x: b.x, y: b.y, vx: b.dir * VX, vy: 0, size: b.size, fast: !!b.fast, group: b.group ?? 0, immune: 0, armor: b.armor ?? 0, split: b.split ?? L.split ?? 2, pcd: 0 }));
+  s.balls = L.balls.map((b) => ({ x: b.x, y: b.y, vx: b.still ? 0 : b.dir * VX, vy: 0, size: b.size, fast: !!b.fast, group: b.group ?? 0, immune: 0, armor: b.armor ?? 0, split: b.split ?? L.split ?? 2, pcd: 0 }));
   s.rects = (L.rects ?? []).map((r) => ({ ...r, bx: r.x, by: r.y }));
   s.lt = 0;
   s.grav = 1;
@@ -490,14 +492,27 @@ function stepBalls(s: State, L: Level, ev: GameEvent[]) {
         else { b.y = top + r; b.vy = up ? Math.abs(b.vy) : bv; }
       }
     }
-    if (!gone && L.portals) {
+    if (!gone && (L.portals || L.chain)) {
       if (b.pcd > 0) b.pcd--;
       else {
-        for (const [ax, ay, bx, by] of L.portals) {
-          const da = (b.x - ax) ** 2 + (b.y - ay) ** 2, db = (b.x - bx) ** 2 + (b.y - by) ** 2;
-          const near = (RADII[b.size] * 0.5 + 18) ** 2;
-          if (da < near) { b.x = bx; b.y = by; b.pcd = 45; ev.push({ t: 'portal', x: bx, y: by }); break; }
-          if (db < near) { b.x = ax; b.y = ay; b.pcd = 45; ev.push({ t: 'portal', x: ax, y: ay }); break; }
+        // a portal is an upright oval; a ball goes in when its centre passes through it
+        const rx = 16 + RADII[b.size] * 0.5, ry = 34 + RADII[b.size] * 0.6;
+        const inside = (x: number, y: number) => ((b.x - x) / rx) ** 2 + ((b.y - y) / ry) ** 2 < 1;
+        const out = (x: number, y: number) => {
+          b.x = x; b.y = y; b.pcd = 45;
+          // coming out up high: the ball drops out rather than flying into the roof
+          if (y < H / 2 && s.grav > 0 && b.vy < 0) b.vy = 0;
+          ev.push({ t: 'portal', x, y });
+        };
+        let moved = false;
+        if (L.chain) {
+          for (let k = 0; k < L.chain.length && !moved; k++) {
+            if (inside(L.chain[k][0], L.chain[k][1])) { const nx = L.chain[(k + 1) % L.chain.length]; out(nx[0], nx[1]); moved = true; }
+          }
+        }
+        for (const [ax, ay, bx, by] of L.portals ?? []) {
+          if (moved) break;
+          if (inside(ax, ay)) { out(bx, by); moved = true; } else if (inside(bx, by)) { out(ax, ay); moved = true; }
         }
       }
     }

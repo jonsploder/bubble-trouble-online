@@ -12,32 +12,41 @@ declare const process: { exit(code: number): never };
 // try each action for a short horizon, and keep the one that survives and scores best.
 // (The same snapshot/replay property is what rollback netcode will rely on.)
 const ACTIONS = [IN_FIRE, IN_FIRE | IN_LEFT, IN_FIRE | IN_RIGHT, 0, IN_LEFT, IN_RIGHT];
+// A plan maps ticks-from-now to an action. Besides "hold one action", the bot can
+// "step k ticks one way, then stand and fire", which precise timing levels need.
+type Plan = (t: number) => number;
+const PLANS: Plan[] = [
+  ...ACTIONS.map((a) => () => a),
+  ...[IN_LEFT, IN_RIGHT].flatMap((d) => [1, 2, 3, 4, 5, 6].map((k) => (t: number) => (t < k ? d : IN_FIRE))),
+];
 const scratch: GameEvent[] = [];
-let held = IN_FIRE;
+let plan: Plan = () => IN_FIRE, planAt = 0;
 function bot(s: State): number {
-  if (s.phase !== 'play' || s.tick % 4) return held;
-  let bestScore = -Infinity;
-  for (const a of ACTIONS) {
-    const c: State = JSON.parse(JSON.stringify(s));
-    let score = 0;
-    for (let t = 0; t < 50; t++) {
-      step(c, [a], LV, scratch);
-      scratch.length = 0;
-      if (c.phase === 'dead' || c.phase === 'over') { score = -1e6 + t * 1000; break; }
-      if (c.phase !== 'play') { score += 1e5; break; }
+  if (s.phase !== 'play') return IN_FIRE;
+  if (s.tick % 4 === 0) {
+    let bestScore = -Infinity;
+    for (const p of PLANS) {
+      const c: State = JSON.parse(JSON.stringify(s));
+      let score = 0;
+      for (let t = 0; t < 50; t++) {
+        step(c, [p(t)], LV, scratch);
+        scratch.length = 0;
+        if (c.phase === 'dead' || c.phase === 'over') { score = -1e6 + t * 1000; break; }
+        if (c.phase !== 'play') { score += 1e5; break; }
+      }
+      score += c.score - s.score;
+      // prefer standing roughly under the nearest ball
+      let near = 1e9;
+      for (const b of c.balls) near = Math.min(near, Math.abs(b.x - c.players[0].x) + (H - b.y) * 0.1 - RADII[b.size]);
+      if (c.balls.length) score -= near * 0.05;
+      if (score > bestScore) { bestScore = score; plan = p; planAt = s.tick; }
     }
-    score += c.score - s.score;
-    // prefer standing roughly under the nearest ball
-    let near = 1e9;
-    for (const b of c.balls) near = Math.min(near, Math.abs(b.x - c.players[0].x) + (H - b.y) * 0.1 - RADII[b.size]);
-    if (c.balls.length) score -= near * 0.05;
-    if (score > bestScore) { bestScore = score; held = a; }
   }
-  return held;
+  return plan(s.tick - planAt);
 }
 
 function run(level: number, seed: number) {
-  held = IN_FIRE; // the bot's own memory must not leak between runs
+  plan = () => IN_FIRE; planAt = 0; // the bot's own memory must not leak between runs
   const s = newGame(LV, 1, level, seed);
   const ev: GameEvent[] = [];
   let attempts = 1, ticks = 0;

@@ -9,7 +9,7 @@ import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 10;
+const VERSION = 11;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
@@ -328,6 +328,7 @@ function menuKey(code: string) {
   if (code === 'Enter' || code === 'Space') {
     if (menu.mode === 2) openHost();
     else if (menu.mode === 3) openJoin();
+    else if (menu.mode === 0 && MODES[menu.gmode].id !== 'classic') return; // needs 2+ players: the menu says so
     else {
       levels = SETS[menu.set].levels;
       gameSet = menu.set;
@@ -538,7 +539,7 @@ function frame(now: number) {
   } else {
     menu.t += dt;
     const set = SETS[menu.set];
-    drawMenu(ctx, { row: menu.row, t: menu.t, setName: set.name, levelName: `${menu.level + 1}. ${set.levels[menu.level].name}`, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode] });
+    drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, setName: set.name, levelName: `${menu.level + 1}. ${set.levels[menu.level].name}`, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode] });
   }
   if (portrait()) drawRotate(ctx);
   requestAnimationFrame(frame);
