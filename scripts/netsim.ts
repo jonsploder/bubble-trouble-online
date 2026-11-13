@@ -1,4 +1,4 @@
-// Offline harness for the netcode: runs two RollbackSessions against each other on a
+// Offline harness for the netcode: runs 2-4 RollbackSessions against each other on a
 // simulated timeline. Used by nettest.ts (synthetic networks) and replay.ts (recorded ones).
 // It drives the sessions exactly like the game loop in src/main.ts does.
 import { RollbackSession } from '../src/rollback';
@@ -14,8 +14,8 @@ export interface PeerScript {
 }
 
 export interface LinkModel {
-  /** One-way delay in ms for a packet sent by `from` at time t, or null if it is lost. */
-  delay(from: number, t: number): number | null;
+  /** One-way delay in ms for a packet sent from -> to at time t; null if lost or there is no link. */
+  delay(from: number, to: number, t: number): number | null;
 }
 
 export interface SimResult {
@@ -25,46 +25,55 @@ export interface SimResult {
   mismatched: number;
   frames: number[];
   confirmed: number[];
-  /** Largest gap between the two players' frame counters seen after the first second. */
+  /** Largest gap between any two players' frame counters seen after the first second. */
   maxFrameGap: number;
   phase: string;
 }
 
 export function simulate(levels: Level[], level: number, seed: number, peers: PeerScript[], link: LinkModel): SimResult {
-  const queue: { at: number; to: number; m: InputMsg }[] = [];
+  const n = peers.length;
+  const queue: { at: number; from: number; to: number; m: InputMsg }[] = [];
   let now = 0;
-  const ses = [0, 1].map((me) => new RollbackSession(levels, me, newGame(levels, 2, level, seed), (m) => {
-    const d = link.delay(me, now);
-    if (d !== null) queue.push({ at: now + d, to: 1 - me, m: JSON.parse(JSON.stringify(m)) });
+  const ses = peers.map((_, me) => new RollbackSession(levels, me, newGame(levels, n, level, seed), (to, m) => {
+    const d = link.delay(me, to, now);
+    if (d !== null) queue.push({ at: now + d, from: me, to, m: JSON.parse(JSON.stringify(m)) });
   }));
-  const idx = [0, 0], acc = [0, 0], last = [peers[0].frames[0], peers[1].frames[0]];
+  const idx = peers.map(() => 0), acc = peers.map(() => 0), last = peers.map((p) => p.frames[0]);
   let maxFrameGap = 0;
   for (;;) {
-    // next display frame across both peers
-    const t0 = idx[0] < peers[0].frames.length ? peers[0].frames[idx[0]] : Infinity;
-    const t1 = idx[1] < peers[1].frames.length ? peers[1].frames[idx[1]] : Infinity;
-    if (t0 === Infinity || t1 === Infinity) break;
-    const p = t0 <= t1 ? 0 : 1;
-    now = p === 0 ? t0 : t1;
+    // next display frame across all peers; stop when anyone runs out
+    let p = -1, t = Infinity, done = false;
+    for (let i = 0; i < n; i++) {
+      if (idx[i] >= peers[i].frames.length) { done = true; break; }
+      if (peers[i].frames[idx[i]] < t) { t = peers[i].frames[idx[i]]; p = i; }
+    }
+    if (done) break;
+    now = t;
     idx[p]++;
     // deliver everything that has arrived by now, in arrival order
     queue.sort((a, b) => a.at - b.at);
-    while (queue.length && queue[0].at <= now) { const q = queue.shift()!; ses[q.to].receive(q.m, q.at); }
+    while (queue.length && queue[0].at <= now) { const q = queue.shift()!; ses[q.to].receive(q.from, q.m, q.at); }
     const dt = Math.min(0.1, (now - last[p]) / 1000);
     last[p] = now;
     acc[p] = Math.min(acc[p] + dt * ses[p].rate, DT * 4);
     while (acc[p] >= DT) { acc[p] -= DT; ses[p].tick(peers[p].inputAt(now), now); }
-    if (now > 1000) maxFrameGap = Math.max(maxFrameGap, Math.abs(ses[0].frame - ses[1].frame));
+    if (now > 1000) {
+      const fr = ses.map((s) => s.frame);
+      maxFrameGap = Math.max(maxFrameGap, Math.max(...fr) - Math.min(...fr));
+    }
   }
+  // every pair of players must agree on every checkpoint they both reached
   let compared = 0, mismatched = 0;
-  for (const [f, sum] of ses[0].sums) {
-    const other = ses[1].sums.get(f);
-    if (other === undefined) continue;
-    compared++;
-    if (other !== sum) mismatched++;
+  for (let i = 1; i < n; i++) {
+    for (const [f, sum] of ses[0].sums) {
+      const other = ses[i].sums.get(f);
+      if (other === undefined) continue;
+      compared++;
+      if (other !== sum) mismatched++;
+    }
   }
   return {
-    stats: ses.map((s) => s.stats), desync: ses[0].desync || ses[1].desync, compared, mismatched,
+    stats: ses.map((s) => s.stats), desync: ses.some((s) => s.desync), compared, mismatched,
     frames: ses.map((s) => s.frame), confirmed: ses.map((s) => s.confirmedFrame), maxFrameGap, phase: ses[0].confirmed.phase,
   };
 }

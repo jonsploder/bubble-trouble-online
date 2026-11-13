@@ -25,9 +25,10 @@ interface TraceSession {
   peers: (PeerLog | null)[];
 }
 
-interface Decoded { ticks: number[]; inputs: number[]; rx: { t: number; n: number }[] }
+interface Decoded { ticks: number[]; inputs: number[]; rx: { t: number; n: number }[][] }
 
-function decode(log: PeerLog): Decoded {
+/** Unpack one player's log. `rx[q]` lists the packets received from player q. */
+function decode(log: PeerLog, players: number): Decoded {
   const ticks: number[] = [];
   let t = 0;
   for (const d of log.tick) { t += d; ticks.push(t / 10); }
@@ -36,9 +37,16 @@ function decode(log: PeerLog): Decoded {
     const end = i + 2 < log.in.length ? log.in[i + 2] : ticks.length;
     for (let k = log.in[i]; k < end; k++) inputs[k] = log.in[i + 1];
   }
-  const rx: { t: number; n: number }[] = [];
-  t = 0;
-  for (let i = 0; i < log.rx.length; i += 2) { t += log.rx[i]; rx.push({ t: t / 10, n: log.rx[i + 1] }); }
+  // old two-player logs hold one flat list: everything came from the other player
+  const lists: number[][] = Array.from({ length: players }, () => []);
+  if (typeof log.rx[0] === 'number' || log.rx.length === 0) lists[1 - log.me] = log.rx as number[];
+  else (log.rx as number[][]).forEach((l, q) => { lists[q] = l; });
+  const rx = lists.map((l) => {
+    const out: { t: number; n: number }[] = [];
+    let tt = 0;
+    for (let i = 0; i < l.length; i += 2) { tt += l[i]; out.push({ t: tt / 10, n: l[i + 1] }); }
+    return out;
+  });
   return { ticks, inputs, rx };
 }
 
@@ -56,51 +64,60 @@ let quiet = false;
 const say = (s: string) => { if (!quiet) console.log(s); };
 
 function replay(name: string, ses: TraceSession): { ok: boolean; bad: number; stats: NetStats[] } | null {
-  const [la, lb] = ses.peers;
   const set = SETS[ses.meta.set];
-  if (!la || !lb || !set || !set.levels[ses.meta.level]) { say(`skip ${name}: incomplete (needs both players' logs)`); return null; }
-  const A = decode(la), B = decode(lb);
-  if (A.ticks.length < 120 || B.ticks.length < 120) { say(`skip ${name}: too short`); return null; }
+  const n = ses.peers.length;
+  if (ses.peers.some((p) => !p) || !set || !set.levels[ses.meta.level]) { say(`skip ${name}: incomplete (needs every player's log)`); return null; }
+  const logs = ses.peers as PeerLog[];
+  const D = logs.map((l) => decode(l, n));
+  if (D.some((d) => d.ticks.length < 120)) { say(`skip ${name}: too short`); return null; }
 
   // Raw "delay" of each packet is measured across two unsynchronised clocks. Assuming the
   // fastest packet each way took equally long (as NTP does) gives the clock offset.
-  const raw = (rx: Decoded['rx'], senderTicks: number[]) => {
+  // raw[a][b]: packet number -> (arrival on b's clock) - (send on a's clock)
+  const raw: Map<number, number>[][] = D.map((a, ai) => D.map((b) => {
     const m = new Map<number, number>();
-    for (const r of rx) if (r.n < senderTicks.length && !m.has(r.n)) m.set(r.n, r.t - senderTicks[r.n]);
+    for (const r of b.rx[ai]) if (r.n < a.ticks.length && !m.has(r.n)) m.set(r.n, r.t - a.ticks[r.n]);
     return m;
-  };
-  const ab = raw(B.rx, A.ticks), ba = raw(A.rx, B.ticks);
-  if (ab.size < 30 || ba.size < 30) { say(`skip ${name}: almost no packets got through`); return null; }
-  const off = (Math.min(...ab.values()) - Math.min(...ba.values())) / 2; // B's clock minus A's
-  const bTicks = B.ticks.map((t) => t - off);
-  const delays = [new Map<number, number>(), new Map<number, number>()];
-  for (const [n, d] of ab) delays[0].set(n, Math.max(0.5, d - off));
-  for (const [n, d] of ba) delays[1].set(n, Math.max(0.5, d + off));
-  const sendTimes = [A.ticks, bTicks];
+  }));
+  const linked = (a: number, b: number) => raw[a][b].size >= 30 && raw[b][a].size >= 30;
+  // Every player's clock relative to player 0's, walking outward over the links that exist.
+  const off: (number | null)[] = D.map((_, i) => (i === 0 ? 0 : null));
+  for (let pass = 0; pass < n; pass++) {
+    for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) {
+      if (off[a] === null || off[b] !== null || !linked(a, b)) continue;
+      off[b] = off[a]! + (Math.min(...raw[a][b].values()) - Math.min(...raw[b][a].values())) / 2;
+    }
+  }
+  if (off.some((o) => o === null)) { say(`skip ${name}: a player had no working link to the others`); return null; }
+  const ticks = D.map((d, i) => d.ticks.map((t) => t - off[i]!)); // everyone on player 0's clock
+  const delays: Map<number, number>[][] = raw.map((row, a) => row.map((m, b) => {
+    const out = new Map<number, number>();
+    for (const [k, d] of m) out.set(k, Math.max(0.5, d - (off[b]! - off[a]!)));
+    return out;
+  }));
 
-  const script = (ticks: number[], inputs: number[]): PeerScript => ({
-    frames: ticks.filter((t, i) => i === 0 || t > ticks[i - 1]),
-    inputAt: (t) => inputs[lastAtOrBefore(ticks, t)],
-  });
-  const r = simulate(set.levels, ses.meta.level, ses.meta.seed, [script(A.ticks, A.inputs), script(bTicks, B.inputs)], {
-    delay: (from, t) => delays[from].get(lastAtOrBefore(sendTimes[from], t)) ?? null,
-  });
+  const r = simulate(set.levels, ses.meta.level, ses.meta.seed,
+    D.map((d, i): PeerScript => ({
+      frames: ticks[i].filter((t, k) => k === 0 || t > ticks[i][k - 1]),
+      inputAt: (t) => d.inputs[lastAtOrBefore(ticks[i], t)],
+    })),
+    { delay: (from, to, t) => (linked(from, to) ? delays[from][to].get(lastAtOrBefore(ticks[from], t)) ?? null : null) });
 
-  const secs = Math.max(A.ticks[A.ticks.length - 1], B.ticks[B.ticks.length - 1]) / 1000;
-  const link = (i: number, sent: number) => {
-    const d = [...delays[i].values()];
-    return `${median(d).toFixed(0)}ms (p95 ${pctl(d, 0.95).toFixed(0)}ms, lost ${(100 * (1 - d.length / sent)).toFixed(1)}%)`;
-  };
-  const bad = badness(r.stats[0]) + badness(r.stats[1]);
+  const secs = Math.max(...ticks.map((t) => t[t.length - 1])) / 1000;
+  const bad = r.stats.reduce((a, s) => a + badness(s), 0);
   const ok = !r.desync && r.mismatched === 0;
-  say(`${ok ? 'ok  ' : 'FAIL'} ${name}  ${set.name} level ${ses.meta.level + 1}, ${secs.toFixed(0)}s, recorded on v${ses.meta.version}`);
-  say(`       link: host->guest ${link(0, A.ticks.length)}, guest->host ${link(1, B.ticks.length)}, start offset ${(bTicks[0] - A.ticks[0]).toFixed(0)}ms`);
-  const live = [la.end?.stats, lb.end?.stats] as (NetStats | undefined)[];
-  ['host ', 'guest'].forEach((who, i) => {
-    if (live[i]) say(`       ${who} then: ${describe(live[i]!)}`);
-    say(`       ${who} now:  ${describe(r.stats[i])}`);
+  say(`${ok ? 'ok  ' : 'FAIL'} ${name}  ${n} players, ${set.name} level ${ses.meta.level + 1}, ${secs.toFixed(0)}s, recorded on v${ses.meta.version}`);
+  for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) {
+    if (!linked(a, b)) { say(`       link P${a + 1}-P${b + 1}: none (relayed)`); continue; }
+    const d1 = [...delays[a][b].values()], d2 = [...delays[b][a].values()];
+    say(`       link P${a + 1}-P${b + 1}: ${median(d1).toFixed(0)}ms / ${median(d2).toFixed(0)}ms each way, p95 ${pctl(d1, 0.95).toFixed(0)} / ${pctl(d2, 0.95).toFixed(0)}ms, lost ${(100 * (1 - d1.length / D[a].ticks.length)).toFixed(1)}% / ${(100 * (1 - d2.length / D[b].ticks.length)).toFixed(1)}%`);
+  }
+  const live = logs.map((l) => l.end?.stats);
+  logs.forEach((_, i) => {
+    if (live[i]) say(`       P${i + 1} then: ${describe(live[i]!)}`);
+    say(`       P${i + 1} now:  ${describe(r.stats[i])}`);
   });
-  const liveBad = live[0] && live[1] ? (badness(live[0]) + badness(live[1])).toFixed(3) : 'n/a';
+  const liveBad = live.every(Boolean) ? live.reduce((a, s) => a + badness(s!), 0).toFixed(3) : 'n/a';
   say(`       badness then ${liveBad} -> now ${bad.toFixed(3)}${r.desync ? '   DESYNC IN REPLAY' : ''}`);
   return { ok, bad, stats: r.stats };
 }

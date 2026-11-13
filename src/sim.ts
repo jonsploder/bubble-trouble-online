@@ -75,7 +75,12 @@ export interface Level {
 export interface Ball { x: number; y: number; vx: number; vy: number; size: number; fast: boolean; group: number; immune: number; armor: number }
 export interface Shot { kind: 'wire' | 'bullet' | 'beam'; x: number; y: number; owner: number; sticky: boolean; t: number }
 export interface Pickup { x: number; y: number; kind: PickupKind; t: number }
-export interface Player { x: number; face: number; weapon: Weapon; cd: number; shield: boolean; invuln: number }
+export interface Player { x: number; face: number; weapon: Weapon; cd: number; shield: boolean; invuln: number;
+  /** Each player has their own lives. */
+  lives: number;
+  /** Hit on this attempt: sits out until the level restarts or is cleared. */
+  down: boolean;
+}
 
 export type Phase = 'ready' | 'play' | 'dead' | 'clear' | 'over' | 'won';
 
@@ -86,7 +91,6 @@ export interface State {
   level: number;
   phase: Phase;
   phaseT: number;
-  lives: number;
   score: number;
   timeLeft: number; // ticks
   ceilY: number;
@@ -134,11 +138,11 @@ function rand(s: State): number {
 
 export function newGame(levels: Level[], numPlayers: number, startLevel = 0, seed = 1234567): State {
   const s: State = {
-    tick: 0, paused: false, rng: seed | 0, level: startLevel, phase: 'ready', phaseT: 0, lives: 3, score: 0,
+    tick: 0, paused: false, rng: seed | 0, level: startLevel, phase: 'ready', phaseT: 0, score: 0,
     timeLeft: 0, ceilY: 0, speed: 1, slowT: 0, lt: 0, grav: 1, balls: [], rects: [], shots: [], pickups: [],
     players: [],
   };
-  for (let i = 0; i < numPlayers; i++) s.players.push({ x: W / 2, face: 1, weapon: 'harpoon', cd: 0, shield: false, invuln: 0 });
+  for (let i = 0; i < numPlayers; i++) s.players.push({ x: W / 2, face: 1, weapon: 'harpoon', cd: 0, shield: false, invuln: 0, lives: 3, down: false });
   loadLevel(s, levels);
   return s;
 }
@@ -159,7 +163,10 @@ function loadLevel(s: State, levels: Level[]) {
   s.phaseT = 100;
   const n = s.players.length;
   s.players.forEach((p, i) => {
-    p.x = L.start?.[i] ?? W / 2 + (i - (n - 1) / 2) * 70;
+    // Levels list start spots for two players; a third and fourth stand just beside them.
+    const st = L.start;
+    p.x = !st ? W / 2 + (i - (n - 1) / 2) * 70 : i < st.length ? st[i] : Math.min(W - PW / 2, st[i % st.length] + 34);
+    p.down = p.lives <= 0;
     p.face = 1;
     p.weapon = L.weapon ?? 'harpoon';
     p.cd = 0;
@@ -203,6 +210,7 @@ function pop(s: State, i: number, L: Level, ev: GameEvent[]) {
 
 function stepPlayers(s: State, inputs: number[], L: Level, ev: GameEvent[], canFire: boolean) {
   s.players.forEach((p, i) => {
+    if (p.down) return;
     const inp = inputs[i] | 0;
     const dx = (inp & IN_RIGHT ? 1 : 0) - (inp & IN_LEFT ? 1 : 0);
     if (dx) {
@@ -348,7 +356,7 @@ function applyPickup(s: State, p: Player, kind: PickupKind, L: Level) {
     case 'shield': p.shield = true; break;
     case 'slow': s.slowT = 300; break;
     case 'time': s.timeLeft = Math.min(L.time * 60, s.timeLeft + 600); break;
-    case 'life': s.lives = Math.min(5, s.lives + 1); break;
+    case 'life': p.lives = Math.min(5, p.lives + 1); break;
     default: p.weapon = kind;
   }
 }
@@ -368,13 +376,13 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
       return;
     case 'dead':
       if (--s.phaseT <= 0) {
-        s.lives--;
-        if (s.lives <= 0) s.phase = 'over'; else loadLevel(s, levels);
+        if (s.players.some((p) => p.lives > 0)) loadLevel(s, levels); else s.phase = 'over';
       }
       return;
     case 'clear':
       if (--s.phaseT <= 0) {
-        if (s.level + 1 >= levels.length) s.phase = 'won';
+        if (!s.players.some((p) => p.lives > 0)) s.phase = 'over';
+        else if (s.level + 1 >= levels.length) s.phase = 'won';
         else { s.level++; loadLevel(s, levels); }
       }
       return;
@@ -414,21 +422,23 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
     if (pk.y < H - 12) pk.y = Math.min(H - 12, pk.y + 160 * DT);
     else if (--pk.t <= 0) { s.pickups.splice(i, 1); continue; }
     if (pk.y > H - PH - 10) {
-      for (const p of s.players) {
-        if (Math.abs(p.x - pk.x) < PW / 2 + 12) {
-          applyPickup(s, p, pk.kind, L);
-          ev.push({ t: 'pickup', kind: pk.kind });
-          s.pickups.splice(i, 1);
-          break;
-        }
+      // If several players are touching it on the same tick, it goes to one of them at
+      // random (even odds), not to whoever has the lowest player number.
+      const takers = s.players.filter((p) => !p.down && Math.abs(p.x - pk.x) < PW / 2 + 12);
+      if (takers.length) {
+        const p = takers.length === 1 ? takers[0] : takers[Math.floor(rand(s) * takers.length)];
+        applyPickup(s, p, pk.kind, L);
+        ev.push({ t: 'pickup', kind: pk.kind });
+        s.pickups.splice(i, 1);
       }
     }
   }
 
-  // death checks
-  let dead = false, deadX = 0;
+  // A hit costs that player one of their own lives and sits them out for this attempt.
+  // The others play on; the level only restarts once everyone is down.
+  const fell = (p: Player) => { p.down = true; p.lives--; ev.push({ t: 'die', x: p.x }); };
   for (const p of s.players) {
-    if (p.invuln > 0) continue;
+    if (p.down || p.invuln > 0) continue;
     const x0 = p.x - PW / 2 + 3, x1 = p.x + PW / 2 - 3, y0 = H - PH + 4;
     for (const b of s.balls) {
       const cx = b.x < x0 ? x0 : b.x > x1 ? x1 : b.x;
@@ -436,22 +446,23 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
       const dx = b.x - cx, dy = b.y - cy, r = RADII[b.size] - 1;
       if (dx * dx + dy * dy < r * r) {
         if (p.shield) { p.shield = false; p.invuln = 100; ev.push({ t: 'shield' }); }
-        else { dead = true; deadX = p.x; }
+        else fell(p);
         break;
       }
     }
   }
-  if (s.ceilY + (hasSpikes(L) ? SPIKE : 0) >= H - PH) { dead = true; deadX = s.players[0].x; }
-  if (--s.timeLeft <= 0) { s.timeLeft = 0; dead = true; deadX = s.players[0].x; }
+  // the roof and the clock take everyone still standing
+  let all = s.ceilY + (hasSpikes(L) ? SPIKE : 0) >= H - PH;
+  if (--s.timeLeft <= 0) { s.timeLeft = 0; all = true; }
+  if (all) for (const p of s.players) if (!p.down) fell(p);
 
   if (s.balls.length === 0) {
     s.phase = 'clear';
     s.phaseT = 120;
     s.score += Math.floor(s.timeLeft / 60) * 10;
     ev.push({ t: 'clear' });
-  } else if (dead) {
+  } else if (!s.players.some((p) => !p.down)) {
     s.phase = 'dead';
     s.phaseT = 90;
-    ev.push({ t: 'die', x: deadX });
   }
 }

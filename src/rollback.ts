@@ -1,17 +1,19 @@
-// Two-player rollback netcode. Transport-agnostic: give it a `send` function and feed it
-// incoming messages. Only inputs cross the wire.
+// Rollback netcode for 2-4 players. Transport-agnostic: give it a `send(to, msg)` function
+// and feed it incoming messages. Only inputs cross the wire.
 //
-// - Your own inputs apply after INPUT_DELAY frames; the other player's inputs are predicted
+// - Your own inputs apply after `inputDelay` frames; other players' inputs are predicted
 //   (assumed unchanged) until the real ones arrive.
-// - `confirmed` is the state at the last frame where both players' real inputs are known.
+// - `confirmed` is the state at the last frame where everyone's real inputs are known.
 //   When a prediction turns out wrong, we rebuild `predicted` from `confirmed`.
-// - Every packet resends all inputs the peer has not acknowledged, so lost packets are harmless.
+// - Every packet resends whatever the recipient has not acknowledged, so loss is harmless.
+// - Players also pass on each other's inputs. If two players cannot reach each other
+//   directly, their inputs still arrive by way of a third.
 // - Clock sync is done by gently running faster/slower (`rate`), never by dropping frames.
-// - If the peer goes quiet we slow down progressively, and only freeze as a last resort.
+// - If someone goes quiet we slow down progressively, and only freeze as a last resort.
 //
-// The session also records a compact log (timings, inputs, packet arrivals). Logs from both
-// players are enough to replay the session against any future version of this file: see
-// scripts/replay.ts.
+// The session also records a compact log (timings, inputs, packet arrivals). The logs from
+// all players are enough to replay the session against any future version of this file:
+// see scripts/replay.ts.
 
 import { IN_PAUSE, step } from './sim';
 import type { GameEvent, Level, State } from './sim';
@@ -36,10 +38,9 @@ export interface InputMsg {
   t: 'in';
   n: number; // packet number = sender's tick count
   f: number; // sender's current frame
-  base: number; // frame of inputs[0]
-  inputs: number[];
-  ack: number; // how many of the receiver's inputs the sender holds
-  adv: number; // sender's frame lead as it sees it
+  adv: number; // sender's frame lead over the recipient, as the sender sees it
+  have: number[]; // how many inputs the sender holds, per player
+  inp: [number, number, number[]][]; // [player, first frame, inputs] the recipient is missing
   cf: number; // frame of checksum
   ch: number; // checksum of confirmed state at cf
 }
@@ -53,9 +54,9 @@ export interface NetStats {
   rollbacks: number;
   rollbackFrames: number;
   maxRollback: number;
-  /** Frames compared: what we showed for the other player vs. what really happened. */
+  /** Frames compared: where we drew the other players vs. where they really were. */
   confirmed: number;
-  /** Sum / max of the other player's position error in px, and frames where it was > 8px. */
+  /** Sum / max of the worst other-player position error in px, and frames where it was > 8px. */
   errSum: number;
   errMax: number;
   errFrames: number;
@@ -64,12 +65,14 @@ export interface NetStats {
 /** Times are tenths of a millisecond since session start. Flat arrays keep it small. */
 export interface PeerLog {
   me: number;
+  /** Number of players (absent in old two-player logs). */
+  players?: number;
   /** Delta time of every tick. Packet n is sent on tick n. */
   tick: number[];
   /** Pairs: tick index, input bits (on change). */
   in: number[];
-  /** Pairs: delta time, packet number received. */
-  rx: number[];
+  /** Per sender: pairs of (delta time, packet number). Old two-player logs: one flat list. */
+  rx: number[][] | number[];
   /** Tick indexes that froze. */
   stall: number[];
   /** Pairs: tick index, rollback depth. */
@@ -97,33 +100,39 @@ export class RollbackSession {
   stalled = false;
   /** Multiply real elapsed time by this before ticking. */
   rate = 1;
-  /** Ticks since we last heard from the peer. */
+  /** Ticks since we last heard from anyone. */
   silence = 0;
+  readonly players: number;
   readonly sums = new Map<number, number>();
   readonly stats: NetStats = { ticks: 0, stalled: 0, slowed: 0, rollbacks: 0, rollbackFrames: 0, maxRollback: 0, confirmed: 0, errSum: 0, errMax: 0, errFrames: 0 };
   readonly log: PeerLog;
 
-  private local: number[] = [];
-  private remote: number[] = [];
-  private shown: number[] = []; // other player's x as displayed, per frame
-  private peerAck = 0;
-  private remoteFrame = 0;
-  private offset = 0; // smoothed estimate of how many frames we are ahead of the peer
-  private heard = false;
+  private inputs: number[][] = []; // per player, indexed by frame
+  private theirHave: number[][] = []; // [peer][player]: what that peer told us it holds
+  private remoteFrame: number[];
+  private offset: number[]; // smoothed estimate of how many frames we are ahead of each peer
+  private heard: boolean[];
+  private shown: number[][] = []; // every player's x as displayed, per frame
   private dirty = false;
   private peerSums = new Map<number, number>();
   private lastCf = 0;
   private scratch: GameEvent[] = [];
   private lastT = 0;
-  private lastRx = 0;
+  private lastRx: number[];
   private lastIn = -1;
   private lastRate = 100;
 
-  constructor(private levels: Level[], private me: number, initial: State, private send: (m: InputMsg) => void) {
+  constructor(private levels: Level[], private me: number, initial: State, private send: (to: number, m: InputMsg) => void) {
+    const n = (this.players = initial.players.length);
     this.confirmed = initial;
     this.predicted = JSON.parse(JSON.stringify(initial));
-    for (let i = 0; i < tuning.inputDelay; i++) this.local.push(0);
-    this.log = { me, tick: [], in: [], rx: [], stall: [], rb: [], rate: [] };
+    for (let p = 0; p < n; p++) { this.inputs.push([]); this.theirHave.push(new Array<number>(n).fill(0)); }
+    for (let i = 0; i < tuning.inputDelay; i++) this.inputs[me].push(0);
+    this.remoteFrame = new Array<number>(n).fill(0);
+    this.offset = new Array<number>(n).fill(0);
+    this.heard = new Array<boolean>(n).fill(false);
+    this.lastRx = new Array<number>(n).fill(0);
+    this.log = { me, players: n, tick: [], in: [], rx: Array.from({ length: n }, () => [] as number[]), stall: [], rb: [], rate: [] };
   }
 
   /** Call 60 * rate times a second with the local player's input bits. `now` is ms since session start. */
@@ -140,37 +149,50 @@ export class RollbackSession {
       this.stats.stalled++;
       this.log.stall.push(n);
     } else {
-      this.local.push(input); // takes effect at frame + INPUT_DELAY
+      this.inputs[this.me].push(input); // takes effect inputDelay frames from now
       this.frame++;
     }
     this.advance(!this.stalled, n);
     this.updateRate(n);
-    const base = this.peerAck;
-    this.send({
-      t: 'in', n, f: this.frame, base, inputs: this.local.slice(base, base + 240), ack: this.remote.length,
-      adv: this.frame - this.remoteFrame, cf: this.lastCf, ch: this.sums.get(this.lastCf) ?? 0,
-    });
+
+    const have = this.inputs.map((a) => a.length);
+    const cf = this.lastCf, ch = this.sums.get(cf) ?? 0;
+    for (let r = 0; r < this.players; r++) {
+      if (r === this.me) continue;
+      // everything this peer is missing: our own inputs, plus anyone else's we can pass on
+      const inp: InputMsg['inp'] = [];
+      for (let q = 0; q < this.players; q++) {
+        const from = this.theirHave[r][q];
+        if (q !== r && this.inputs[q].length > from) inp.push([q, from, this.inputs[q].slice(from, from + 240)]);
+      }
+      this.send(r, { t: 'in', n, f: this.frame, adv: this.frame - this.remoteFrame[r], have, inp, cf, ch });
+    }
   }
 
-  receive(m: InputMsg, now = 0) {
+  receive(from: number, m: InputMsg, now = 0) {
+    if (from === this.me || from < 0 || from >= this.players) return;
     const t = Math.round(now * 10);
-    this.log.rx.push(t - this.lastRx, m.n);
-    this.lastRx = t;
+    (this.log.rx as number[][])[from].push(t - this.lastRx[from], m.n);
+    this.lastRx[from] = t;
     this.silence = 0;
-    const guess = this.guess();
-    for (let i = 0; i < m.inputs.length; i++) {
-      if (m.base + i !== this.remote.length) continue;
-      this.remote.push(m.inputs[i]);
-      if (m.inputs[i] !== guess) this.dirty = true; // a prediction may have been wrong
+    for (const [p, base, arr] of m.inp) {
+      if (p === this.me || p < 0 || p >= this.players) continue;
+      const guess = this.guess(p);
+      for (let i = 0; i < arr.length; i++) {
+        if (base + i !== this.inputs[p].length) continue;
+        this.inputs[p].push(arr[i]);
+        if (arr[i] !== guess) this.dirty = true; // a prediction may have been wrong
+      }
     }
-    if (m.ack > this.peerAck) this.peerAck = m.ack;
-    if (m.f >= this.remoteFrame) {
-      this.remoteFrame = m.f;
+    const th = this.theirHave[from];
+    for (let q = 0; q < this.players; q++) if (m.have[q] > th[q]) th[q] = m.have[q];
+    if (m.f >= this.remoteFrame[from]) {
+      this.remoteFrame[from] = m.f;
       // Both sides measure "my frame minus the newest frame I've seen from you". Each is
       // inflated by the same latency, so half the difference is the true clock offset.
       const d = (this.frame - m.f - m.adv) / 2;
-      this.offset = this.heard ? this.offset + (d - this.offset) * tuning.offsetSmooth : d;
-      this.heard = true;
+      this.offset[from] = this.heard[from] ? this.offset[from] + (d - this.offset[from]) * tuning.offsetSmooth : d;
+      this.heard[from] = true;
     }
     if (m.cf > 0) {
       const mine = this.sums.get(m.cf);
@@ -185,21 +207,24 @@ export class RollbackSession {
     return this.log;
   }
 
-  /** Prediction for a remote input we don't have yet: same as their last, minus one-shot bits. */
-  private guess(): number {
-    return this.remote.length ? this.remote[this.remote.length - 1] & ~IN_PAUSE : 0;
+  /** Prediction for an input we don't have yet: same as that player's last, minus one-shot bits. */
+  private guess(p: number): number {
+    const a = this.inputs[p];
+    return a.length ? a[a.length - 1] & ~IN_PAUSE : 0;
   }
 
-  private pair(f: number): number[] {
-    const r = f < this.remote.length ? this.remote[f] : this.guess();
-    return this.me === 0 ? [this.local[f], r] : [r, this.local[f]];
+  private inputsAt(f: number): number[] {
+    const out: number[] = [];
+    for (let p = 0; p < this.players; p++) out.push(f < this.inputs[p].length ? this.inputs[p][f] : this.guess(p));
+    return out;
   }
 
   private updateRate(n: number) {
-    let r = 1;
-    if (this.heard) {
-      const d = Math.max(-8, Math.min(8, this.offset));
-      if (Math.abs(d) > tuning.deadband) r -= d * tuning.rateGain; // ahead of the peer: ease off; behind: hurry up
+    let r = 1, sum = 0, count = 0;
+    for (let p = 0; p < this.players; p++) if (this.heard[p]) { sum += this.offset[p]; count++; }
+    if (count) {
+      const d = Math.max(-8, Math.min(8, sum / count));
+      if (Math.abs(d) > tuning.deadband) r -= d * tuning.rateGain; // ahead of the others: ease off; behind: hurry up
     }
     const ahead = this.frame - this.confirmedFrame;
     if (ahead > tuning.softAhead) r *= Math.max(0.3, 1 - (ahead - tuning.softAhead) / (tuning.hardAhead - tuning.softAhead));
@@ -211,19 +236,21 @@ export class RollbackSession {
 
   private advance(stepped: boolean, n: number) {
     const ev = this.scratch;
-    const other = 1 - this.me;
-    const known = Math.min(this.frame, this.remote.length);
+    let known = this.frame;
+    for (let p = 0; p < this.players; p++) if (p !== this.me && this.inputs[p].length < known) known = this.inputs[p].length;
     while (this.confirmedFrame < known) {
       const f = this.confirmedFrame;
-      step(this.confirmed, this.pair(f), this.levels, ev);
+      step(this.confirmed, this.inputsAt(f), this.levels, ev);
       ev.length = 0;
       const shown = this.shown[f];
       this.stats.confirmed++;
-      if (shown !== undefined) {
-        const err = Math.abs(this.confirmed.players[other].x - shown);
+      if (shown) {
+        let err = 0;
+        for (let p = 0; p < this.players; p++) if (p !== this.me) err = Math.max(err, Math.abs(this.confirmed.players[p].x - shown[p]));
         this.stats.errSum += err;
         if (err > this.stats.errMax) this.stats.errMax = err;
         if (err > 8) this.stats.errFrames++;
+        delete this.shown[f];
       }
       const cf = ++this.confirmedFrame;
       if (cf % CHECK_EVERY === 0) {
@@ -247,12 +274,12 @@ export class RollbackSession {
       this.predicted = JSON.parse(JSON.stringify(this.confirmed));
       for (let f = this.confirmedFrame; f < this.frame; f++) {
         const fresh = stepped && f === this.frame - 1;
-        step(this.predicted, this.pair(f), this.levels, fresh ? this.events : ev);
+        step(this.predicted, this.inputsAt(f), this.levels, fresh ? this.events : ev);
         ev.length = 0;
       }
     } else if (stepped) {
-      step(this.predicted, this.pair(this.frame - 1), this.levels, this.events);
+      step(this.predicted, this.inputsAt(this.frame - 1), this.levels, this.events);
     }
-    if (stepped) this.shown[this.frame - 1] = this.predicted.players[other].x;
+    if (stepped) this.shown[this.frame - 1] = this.predicted.players.map((p) => p.x);
   }
 }

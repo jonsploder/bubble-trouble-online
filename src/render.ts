@@ -46,7 +46,8 @@ export function drawRotate(ctx: CanvasRenderingContext2D) {
   text(ctx, 'TURN YOUR PHONE SIDEWAYS', W / 2, VIEW_H / 2, 54, '#ffd43b');
 }
 let shake = 0;
-let otherX = 0; // smoothed draw position of the remote player
+const otherX = [0, 0, 0, 0]; // smoothed draw positions of the remote players
+const COLOR_NAMES = ['blue', 'pink', 'green', 'yellow'];
 
 export function fxEvents(ev: GameEvent[]) {
   for (const e of ev) {
@@ -219,14 +220,15 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
 
   // players
   s.players.forEach((pl, i) => {
-    if (s.phase === 'dead' && s.phaseT % 10 < 5) return;
+    if (pl.lives <= 0 && pl.down) return; // out of the game
     if (pl.invuln > 0 && pl.invuln % 8 < 4) return;
+    ctx.globalAlpha = pl.down ? 0.22 : 1; // hit on this attempt: a ghost where they fell
     // Online, the other player's position is a prediction that gets corrected. Ease toward
     // it instead of snapping, so corrections read as a quick slide rather than a teleport.
     let px = pl.x;
     if (net && i !== net.you) {
-      if (s.phase !== 'play' || Math.abs(px - otherX) > 160) otherX = px;
-      else { otherX += (px - otherX) * 0.4; px = otherX; }
+      if (s.phase !== 'play' || Math.abs(px - otherX[i]) > 160) otherX[i] = px;
+      else { otherX[i] += (px - otherX[i]) * 0.4; px = otherX[i]; }
     }
     const p = { x: px, face: pl.face, shield: pl.shield };
     const col = PLAYER_COL[i % PLAYER_COL.length];
@@ -248,6 +250,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(p.x, H - PH / 2, 32, 0, Math.PI * 2); ctx.stroke();
     }
+    ctx.globalAlpha = 1;
   });
 
   // particles
@@ -276,19 +279,21 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   ctx.fillStyle = frac < 0.25 ? '#ff6b6b' : '#ffd43b';
   ctx.fillRect(20, H + 12, (W - 40) * frac, 10);
   text(ctx, `${s.level + 1}/${total}  ${L.name}`, 20, H + 42, 16, '#cfd4ff', 'left');
-  text(ctx, '♥'.repeat(Math.max(0, s.lives)), W / 2, H + 42, 18, '#ff8787');
   text(ctx, String(s.score).padStart(6, '0'), W - 20, H + 42, 18, '#fff', 'right');
   s.players.forEach((p, i) => {
-    const hx = i === 0 ? 300 : 600;
+    // one block per player: weapon icon, then their own lives in their own colour
+    const hx = 300 + (i * 500) / s.players.length;
+    ctx.globalAlpha = p.lives > 0 ? 1 : 0.3;
     drawToken(ctx, p.weapon, hx, H + 42, 11);
-    text(ctx, PICK[p.weapon].name, hx + 18, H + 42, 13, PLAYER_COL[i % PLAYER_COL.length], 'left');
+    text(ctx, p.lives > 0 ? '♥'.repeat(p.lives) : 'out', hx + 18, H + 43, p.lives > 0 ? 17 : 13, PLAYER_COL[i % PLAYER_COL.length], 'left');
+    ctx.globalAlpha = 1;
   });
 
   if (net) text(ctx, net.status, W / 2, H + 22, 11, net.status.startsWith('OUT') ? '#ff6b6b' : '#8a90c7', 'center', 400);
 
   // overlays
   if (s.phase === 'ready') {
-    if (net) text(ctx, `You are ${net.you === 0 ? 'blue' : 'pink'}`, W / 2, 275, 16, PLAYER_COL[net.you]);
+    if (net) text(ctx, `You are ${COLOR_NAMES[net.you]}`, W / 2, 275, 16, PLAYER_COL[net.you]);
     text(ctx, L.name, W / 2, 190, 40);
     if (L.hint) text(ctx, L.hint, W / 2, 235, 16, '#cfd4ff', 'center', 400);
     if (touch) text(ctx, 'Left thumb: slide to move      Right thumb: hold to fire', W / 2, 320, 15, '#8a90c7', 'center', 400);
@@ -408,17 +413,17 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
 }
 
 export interface LobbyView {
-  role: 'host' | 'guest'; status: string; code: string; typed: string; msg: string; rtt: number;
+  role: 'host' | 'guest'; status: string; code: string; typed: string; msg: string;
+  /** Who is in the room, e.g. "3 of 4 players in the room". */
+  room: string;
   link: string; copied: boolean; t: number; setName: string; levelName: string;
   /** Host: which settings row is selected. */
   row: number;
   starting: boolean;
-  /** Host: description of recorded session logs, or '' if there are none. */
-  logInfo: string;
 }
 
 /** Vertical positions of the lobby's tappable lines (view coordinates). */
-export const LOBBY_Y = { link: 222, set: 322, level: 356, log: 398, start: 446 };
+export const LOBBY_Y = { link: 222, set: 322, level: 356, start: 446 };
 
 export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   backdrop(ctx, v.t);
@@ -445,12 +450,11 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
       sub(v.link, LOBBY_Y.link - 14, '#8a90c7');
       sub(v.copied ? 'Invite link copied.' : touch ? 'Tap here to share the invite link' : 'C: copy invite link', LOBBY_Y.link + 10, v.copied ? '#8ce99a' : '#cfd4ff');
       if (v.status === 'connected') {
-        text(ctx, v.starting ? `Starting${dots}` : `Friend connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 278, 20, '#8ce99a');
+        text(ctx, v.starting ? `Starting${dots}` : v.room, W / 2, 278, 20, '#8ce99a');
         foot = 'Up/Down, Left/Right: change level   Enter: start   Esc: close room';
         action = 'TAP HERE TO START';
-      } else sub(`Waiting for your friend${dots}`, 278);
+      } else sub(`Waiting for friends to join${dots}  (up to 4 players)`, 278);
       settings(true);
-      if (v.logInfo) sub(`${touch ? 'Tap' : 'L'}: save ${v.logInfo}`, LOBBY_Y.log, '#8a90c7');
     }
   } else if (v.status === 'enter') {
     sub('Type the room code', 150);
@@ -459,7 +463,7 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
     action = 'Tap to type the code';
   } else if (v.status === 'connecting') sub(`Connecting to room ${v.code}${dots}`, 220);
   else {
-    text(ctx, `Connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 190, 24, '#8ce99a');
+    text(ctx, v.room || 'Connected', W / 2, 190, 24, '#8ce99a');
     sub(`Waiting for the host to start${dots}`, 235);
     sub('The host has picked:', 286, '#8a90c7');
     settings(false);

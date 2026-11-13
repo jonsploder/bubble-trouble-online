@@ -42,7 +42,7 @@ function run(level: number, seed: number) {
   const ev: GameEvent[] = [];
   let attempts = 1, ticks = 0;
   while (ticks++ < 60 * 60 * 30) {
-    s.lives = 3;
+    s.players[0].lives = 3;
     const before = s.phase;
     step(s, [bot(s)], LV, ev);
     ev.length = 0;

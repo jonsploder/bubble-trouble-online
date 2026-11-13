@@ -1,16 +1,16 @@
 import { playEvents, unlockAudio } from './audio';
 import { SETS } from './levels';
-import { hostRoom, joinRoom } from './net';
-import type { Link, Room } from './net';
+import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
+import type { Room, RosterEntry } from './net';
 import { CLOSE_BTN, LOBBY_Y, VIEW_H, VIEW_W, drawGame, drawLobby, drawMenu, drawRotate, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
 import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, newGame, step } from './sim';
 import type { GameEvent, Level, State } from './sim';
 
-/** Both players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 6;
-/** Trace collector (see worker/). Empty = don't upload; the host can still save logs by hand. */
+/** All players must run the same build: the sim and level data have to match exactly. */
+const VERSION = 8;
+/** Trace collector (see worker/). Empty = don't upload. */
 const TRACE_URL = (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
 
@@ -41,39 +41,35 @@ let pausePulse = false; // send IN_PAUSE on the next tick
 const keys = new Set<string>();
 const menu = { set: 0, level: 0, mode: 0, row: 0, t: 0 };
 
-type StartMsg = { t: 'start'; v: number; gid: number; set: number; level: number; seed: number };
+/** `seats` lists who is playing, in player order; `wait` is how long the recipient should hold off before starting. */
+type StartMsg = { t: 'start'; v: number; gid: number; set: number; level: number; seed: number; seats: number[]; wait: number };
 type LobbyStatus = 'opening' | 'waiting' | 'enter' | 'connecting' | 'connected' | 'error';
-
-/** One recorded online game: enough to replay it offline (see scripts/replay.ts). */
-interface TraceSession {
-  meta: { version: number; gid: number; set: number; level: number; seed: number; date: string; inputDelay: number };
-  peers: (PeerLog | null)[]; // [host, guest]
-}
+type Msg = { t: string } & Record<string, unknown>;
+interface TraceMeta { version: number; gid: number; set: number; level: number; seed: number; date: string; inputDelay: number; players: number }
 
 const net = {
   role: 'host' as 'host' | 'guest',
   room: null as Room | null,
-  link: null as Link | null,
   code: '',
   typed: '',
   status: 'opening' as LobbyStatus,
   msg: '',
-  rtt: -1,
   copied: false,
-  me: 0,
+  seat: 0, // our seat in the room; the host is always seat 0
+  roster: [] as RosterEntry[], // the guests in the room
+  rtt: {} as Record<number, number>, // host: round trip to each guest seat; guest: to the host (seat 0)
   row: 0, // host's selected settings row in the lobby
   hostSet: 0, // guest's view of what the host has picked
   hostLevel: 0,
   gid: 0,
   lastGid: -1,
   pendingGid: -1,
-  startMsg: null as StartMsg | null, // host: being offered until the guest says 'go'
-  heard: false, // received at least one input packet in the current game
-  meta: null as TraceSession['meta'] | null,
-  logs: [] as TraceSession[],
-  logsSaved: 0,
-  outLog: null as { gid: number; chunks: string[]; acked: boolean[] } | null,
-  inLog: new Map<number, { n: number; parts: string[]; got: number }>(),
+  aborted: -1, // host: a start that was called off before it began
+  /** Host: a start being offered. Repeated to each guest until they answer. */
+  start: null as { msg: StartMsg; at: number; waiting: Set<number> } | null,
+  seats: [] as number[], // seats in the current game; position = player number
+  me: 0, // our player number in the current game
+  meta: null as TraceMeta | null,
 };
 
 // ---------------------------------------------------------------- online
@@ -84,10 +80,10 @@ function inviteLink(): string {
 function closeRoom() {
   net.room?.close();
   net.room = null;
-  net.link = null;
   session = null;
-  net.startMsg = null;
-  net.outLog = null;
+  net.start = null;
+  net.roster = [];
+  net.rtt = {};
 }
 
 function fail(reason: string) {
@@ -102,24 +98,38 @@ function handlers() {
   queueMicrotask(() => { mine = net.room; });
   const live = () => mine !== null && mine === net.room;
   return {
-    onReady: (code: string) => { if (live()) { net.code = code; net.status = 'waiting'; } },
-    onOpen: (link: Link) => { if (live()) { net.link = link; net.status = 'connected'; net.rtt = -1; } },
-    onData: (m: unknown) => { if (live()) onMessage(m as { t: string } & Record<string, unknown>); },
+    onReady: (code: string) => { if (live()) { net.code = code; net.status = net.room!.seats().length ? 'connected' : 'waiting'; } },
+    onLink: (seat: number, up: boolean) => { if (live()) onLink(seat, up); },
+    onData: (seat: number, m: unknown) => { if (live()) onMessage(seat, m as Msg); },
     onClose: (reason: string) => { if (live()) fail(reason); },
   };
+}
+
+function onLink(seat: number, up: boolean) {
+  const room = net.room!;
+  if (net.role === 'host') {
+    net.roster = room.roster();
+    if (!up) delete net.rtt[seat];
+    if (net.code) net.status = room.seats().length ? 'connected' : 'waiting';
+    // someone in the current game dropped out: it can't continue without their inputs
+    if (!up && session && net.seats.includes(seat)) endSession();
+    if (!up && net.start && !session) { net.aborted = net.start.msg.gid; net.start = null; room.setOpen(true); } // start was pending: call it off
+  } else if (seat === 0 && up) {
+    net.status = 'connected';
+  }
 }
 
 /** Pass `keepCode` to reopen the room under its existing code, so invite links already sent still work. */
 function openHost(keepCode = '') {
   closeRoom();
-  Object.assign(net, { role: 'host', status: 'opening', code: keepCode, msg: '', copied: false, me: 0, row: 0 });
+  Object.assign(net, { role: 'host', status: 'opening', code: keepCode, msg: '', copied: false, seat: 0, row: 0 });
   screen = 'lobby';
   net.room = hostRoom(handlers(), keepCode);
 }
 
 function openJoin(code = '') {
   closeRoom();
-  Object.assign(net, { role: 'guest', status: 'enter', typed: code.toUpperCase(), msg: '', me: 1 });
+  Object.assign(net, { role: 'guest', status: 'enter', typed: code.toUpperCase(), msg: '', seat: 0 });
   screen = 'lobby';
   if (code.length === 4) connectJoin();
 }
@@ -131,13 +141,15 @@ function connectJoin() {
 }
 
 function beginSession(m: StartMsg) {
-  if (!net.link) return;
+  const room = net.room;
+  const me = m.seats.indexOf(net.seat);
+  if (!room || me < 0 || session) return;
   levels = SETS[m.set].levels;
   net.lastGid = m.gid;
-  net.heard = false;
-  net.meta = { version: VERSION, gid: m.gid, set: m.set, level: m.level, seed: m.seed, date: new Date().toISOString(), inputDelay: INPUT_DELAY };
-  const link = net.link;
-  session = new RollbackSession(levels, net.me, newGame(levels, 2, m.level, m.seed), (msg) => link.send({ ...msg, gid: m.gid }));
+  net.seats = m.seats;
+  net.me = me;
+  net.meta = { version: VERSION, gid: m.gid, set: m.set, level: m.level, seed: m.seed, date: new Date().toISOString(), inputDelay: INPUT_DELAY, players: m.seats.length };
+  session = new RollbackSession(levels, me, newGame(levels, m.seats.length, m.level, m.seed), (to, msg) => room.send(m.seats[to], { ...msg, gid: m.gid }));
   sessionT0 = performance.now();
   acc = 0;
   pausePulse = false;
@@ -145,134 +157,111 @@ function beginSession(m: StartMsg) {
   keys.clear();
 }
 
-// Start handshake, so both players begin at (nearly) the same moment:
-//   host  -> 'start' (repeated until answered)
-//   guest -> 'go', then waits half a round trip and begins
-//   host  begins when 'go' arrives, i.e. one round trip after sending
+// Start handshake, so everyone begins at (nearly) the same moment. The host picks a moment
+// a little in the future and tells each guest how long to wait, allowing for how long the
+// message takes to reach them. The message is repeated until the guest answers 'go'.
 function hostStart() {
-  if (!net.link || net.startMsg) return;
-  net.startMsg = { t: 'start', v: VERSION, gid: ++net.gid, set: menu.set, level: menu.level, seed: (Date.now() & 0x7fffffff) | 1 };
-  net.link.send(net.startMsg);
+  const room = net.room;
+  if (!room || net.start || session) return;
+  const guests = room.seats().sort((a, b) => a - b);
+  if (!guests.length) return;
+  const lead = Math.max(...guests.map((g) => (net.rtt[g] ?? 150) / 2)) + 60;
+  const msg: StartMsg = { t: 'start', v: VERSION, gid: ++net.gid, set: menu.set, level: menu.level, seed: (Date.now() & 0x7fffffff) | 1, seats: [0, ...guests], wait: 0 };
+  net.start = { msg, at: performance.now() + lead, waiting: new Set(guests) };
+  room.setOpen(false);
+  offerStart();
+  setTimeout(() => { if (net.aborted !== msg.gid) beginSession(msg); }, lead);
 }
 
-/** Leave the current online game (both players end up back in the lobby) and keep its log. */
-function endSession() {
-  if (session && net.meta) {
-    const log = session.finish();
-    uploadHalf(net.meta, net.role, log);
-    if (net.role === 'host') {
-      net.logs.push({ meta: net.meta, peers: [log, null] });
-      if (net.logs.length > 30) { net.logs.shift(); net.logsSaved = Math.max(0, net.logsSaved - 1); }
-    } else {
-      // ship our half of the log to the host in small pieces
-      const text = JSON.stringify(log), chunks: string[] = [];
-      for (let i = 0; i < text.length; i += 8000) chunks.push(text.slice(i, i + 8000));
-      net.outLog = { gid: net.meta.gid, chunks, acked: chunks.map(() => false) };
-    }
+function offerStart() {
+  const st = net.start;
+  if (!st || !net.room) return;
+  for (const g of st.waiting) {
+    net.room.send(g, { ...st.msg, wait: Math.max(0, st.at - performance.now() - (net.rtt[g] ?? 150) / 2) });
   }
-  session = null;
-  net.startMsg = null;
-  screen = 'lobby';
-  net.status = 'connected';
 }
 
-/** Send our half of a finished game's log to the trace collector. Best effort, never blocks play. */
-function uploadHalf(meta: TraceSession['meta'], role: 'host' | 'guest', log: PeerLog) {
+/** Leave the current online game; everyone ends up back in the lobby. */
+function endSession() {
+  if (session && net.meta) uploadLog(net.meta, net.me, session.finish());
+  session = null;
+  net.start = null;
+  net.room?.setOpen(true);
+  screen = 'lobby';
+  if (net.role === 'host') net.status = net.room?.seats().length ? 'connected' : 'waiting';
+  else net.status = 'connected';
+}
+
+/** Send our part of a finished game's log to the trace collector. Best effort, never blocks play. */
+function uploadLog(meta: TraceMeta, me: number, log: PeerLog) {
   if (!TRACE_URL || log.tick.length < 300) return; // skip games under ~5 seconds
-  const sid = `${net.code}-${meta.seed}-${meta.gid}`; // same on both sides
+  const sid = `${net.code}-${meta.seed}-${meta.gid}`; // same for every player
   fetch(`${TRACE_URL}/trace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ format: 'splitstorm-half', v: 1, sid, role, meta, log }),
+    body: JSON.stringify({ format: 'splitstorm-half', v: 1, sid, role: `p${me}`, meta, log }),
   }).catch(() => {});
 }
 
-function saveLogs() {
-  if (!net.logs.length) return;
-  const body = JSON.stringify({ format: 'splitstorm-trace', v: 1, sessions: net.logs });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
-  a.download = `splitstorm-trace-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  net.logsSaved = net.logs.length;
-}
-
-function onMessage(m: { t: string } & Record<string, unknown>) {
+function onMessage(seat: number, m: Msg) {
+  const room = net.room;
+  if (!room) return;
   switch (m.t) {
-    case 'ping':
-      net.link?.send({ t: 'pong', ts: m.ts });
-      if (net.role === 'guest') { net.hostSet = m.set as number; net.hostLevel = m.level as number; }
-      // The peer is sitting in the lobby. If we were mid-game with them, they left it.
-      if (session && net.heard) endSession();
+    case 'ping': // host -> guest, while the host is in the lobby
+      if (net.role !== 'guest' || seat !== 0) break;
+      room.send(0, { t: 'pong', ts: m.ts });
+      net.hostSet = m.set as number;
+      net.hostLevel = m.level as number;
+      net.seat = m.you as number;
+      net.roster = m.players as RosterEntry[];
+      room.setRoster(net.seat, net.roster);
+      // The host is back in the lobby but we are still in its latest game: that game is over.
+      if (session && m.gid === net.lastGid) endSession();
+      break;
+    case 'gping': // guest -> host, while the guest is in the lobby
+      if (net.role !== 'host') break;
+      room.send(seat, { t: 'pong', ts: m.ts });
+      // A player in our current game is sitting in the lobby: they quit, so the game ends.
+      if (session && m.left === net.lastGid && net.seats.includes(seat)) endSession();
       break;
     case 'pong':
-      net.rtt = Math.round(performance.now() - (m.ts as number));
+      net.rtt[seat] = Math.round(performance.now() - (m.ts as number));
       break;
     case 'start': {
       const s = m as unknown as StartMsg;
-      if (net.role !== 'guest') break;
-      if (s.v !== VERSION) { fail('You and the host are on different versions. Both refresh the page.'); break; }
-      net.link?.send({ t: 'go', gid: s.gid });
+      if (net.role !== 'guest' || seat !== 0) break;
+      if (s.v !== VERSION) { fail('You and the host are on different versions. Everyone refresh the page.'); break; }
+      room.send(0, { t: 'go', gid: s.gid });
       if (s.gid === net.lastGid || s.gid === net.pendingGid) break; // a repeat
       net.pendingGid = s.gid;
-      setTimeout(() => { if (net.pendingGid === s.gid && net.link) beginSession(s); }, Math.max(0, net.rtt) / 2);
+      setTimeout(() => { if (net.pendingGid === s.gid && net.room === room) beginSession(s); }, s.wait);
       break;
     }
     case 'go':
-      if (net.startMsg && m.gid === net.startMsg.gid) {
-        const s = net.startMsg;
-        net.startMsg = null;
-        beginSession(s);
+      if (net.start && m.gid === net.start.msg.gid) {
+        net.start.waiting.delete(seat);
+        if (!net.start.waiting.size) net.start = null;
       }
       break;
     case 'in':
-      if (session && m.gid === net.lastGid) {
-        net.heard = true;
-        session.receive(m as unknown as InputMsg, performance.now() - sessionT0);
-      }
-      break;
-    case 'log': { // guest's session log arriving in pieces
-      const gid = m.gid as number, i = m.i as number;
-      net.link?.send({ t: 'logack', gid, i });
-      const entry = net.logs.find((l) => l.meta.gid === gid);
-      if (!entry || entry.peers[1]) break;
-      let buf = net.inLog.get(gid);
-      if (!buf) { buf = { n: m.n as number, parts: [], got: 0 }; net.inLog.set(gid, buf); }
-      if (buf.parts[i] === undefined) { buf.parts[i] = m.d as string; buf.got++; }
-      if (buf.got === buf.n) {
-        try { entry.peers[1] = JSON.parse(buf.parts.join('')) as PeerLog; } catch { /* corrupt: leave it out */ }
-        net.inLog.delete(gid);
-      }
-      break;
-    }
-    case 'logack':
-      if (net.outLog && m.gid === net.outLog.gid) {
-        net.outLog.acked[m.i as number] = true;
-        if (net.outLog.acked.every(Boolean)) net.outLog = null;
-      }
+      if (session && m.gid === net.lastGid) session.receive(net.seats.indexOf(seat), m as unknown as InputMsg, performance.now() - sessionT0);
       break;
   }
 }
 
-// Unreliable channel: keep repeating the things that must arrive.
+// Unreliable channels: keep repeating the things that must arrive.
 let beat = 0;
 setInterval(() => {
-  const link = net.link;
-  if (!link) return;
+  const room = net.room;
+  if (!room) return;
   beat++;
-  if (screen === 'lobby') {
-    if (net.startMsg) link.send(net.startMsg);
-    else if (beat % 4 === 0) link.send({ t: 'ping', ts: performance.now(), set: menu.set, level: menu.level });
-  }
-  const out = net.outLog;
-  if (out) {
-    let sent = 0;
-    for (let i = 0; i < out.chunks.length && sent < 4; i++) {
-      if (out.acked[i]) continue;
-      link.send({ t: 'log', gid: out.gid, i, n: out.chunks.length, d: out.chunks[i] });
-      sent++;
-    }
+  offerStart();
+  if (screen !== 'lobby' || beat % 4 || net.start) return;
+  if (net.role === 'host') {
+    const players = room.roster();
+    for (const g of room.seats()) room.send(g, { t: 'ping', ts: performance.now(), set: menu.set, level: menu.level, you: g, players, gid: net.gid });
+  } else {
+    room.send(0, { t: 'gping', ts: performance.now(), left: net.lastGid });
   }
 }, 100);
 
@@ -324,10 +313,9 @@ function lobbyKey(code: string) {
   if (net.role === 'host') {
     if (code === 'ArrowUp' || code === 'ArrowDown') net.row = 1 - net.row;
     const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
-    if (d && !net.startMsg) changeSetting(net.row, d);
+    if (d && !net.start) changeSetting(net.row, d);
     if (code === 'Enter' && net.status === 'connected') hostStart();
     if (code === 'KeyC' && net.code) navigator.clipboard?.writeText(inviteLink()).then(() => { net.copied = true; }, () => {});
-    if (code === 'KeyL') saveLogs();
   } else if (net.status === 'enter') {
     if (code === 'Backspace') net.typed = net.typed.slice(0, -1);
     else if (/^Key[A-Z]$/.test(code) && net.typed.length < 4) net.typed += code[3];
@@ -346,7 +334,7 @@ function gameKey(code: string) {
   if (s.phase === 'over' || s.phase === 'won') {
     if (code === 'Enter' || code === 'Escape') quitGame();
   } else if (session && session.stalled) {
-    if (code === 'Escape') quitGame(); // frozen waiting for the peer: pausing can't get through
+    if (code === 'Escape') quitGame(); // frozen waiting for someone: pausing can't get through
   } else if (s.paused) {
     if (code === 'Escape' || code === 'Enter' || code === 'KeyP') pausePulse = true;
     else if (code === 'KeyQ') quitGame();
@@ -397,7 +385,6 @@ function tapUI(x: number, y: number): boolean {
       if (near(LOBBY_Y.link, 30) && net.code) shareInvite();
       else if (near(LOBBY_Y.set)) { net.row = 0; lobbyKey(dir); }
       else if (near(LOBBY_Y.level)) { net.row = 1; lobbyKey(dir); }
-      else if (near(LOBBY_Y.log, 14)) saveLogs();
       else if (y > LOBBY_Y.start - 24) lobbyKey('Enter');
     } else if (net.status === 'enter') {
       const typed = (window.prompt('Room code (4 letters)') ?? '').trim();
@@ -456,12 +443,21 @@ let last = performance.now();
 let acc = 0;
 const events: GameEvent[] = [];
 
+/** Lobby line describing who is in the room. */
+function roomLine(): string {
+  const seats = [0, ...net.roster.map((r) => r.seat)].sort((a, b) => a - b);
+  if (net.role === 'guest') return `You are player ${seats.indexOf(net.seat) + 1} of ${seats.length}${net.rtt[0] >= 0 ? `  (${net.rtt[0]} ms)` : ''}`;
+  if (seats.length === 1) return '';
+  const pings = seats.slice(1).map((s) => (net.rtt[s] >= 0 ? `${net.rtt[s]} ms` : '...')).join(', ');
+  return `${seats.length} of ${MAX_PLAYERS} players in the room  (${pings})`;
+}
+
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (screen !== 'game') pointers.clear();
   if (screen === 'game' && session) {
-    // `rate` nudges our clock toward the other player's, and eases off if they go quiet
+    // `rate` nudges our clock toward the other players', and eases off if someone goes quiet
     acc = Math.min(acc + dt * session.rate, DT * 4);
     while (acc >= DT) {
       acc -= DT;
@@ -472,7 +468,7 @@ function frame(now: number) {
     const waiting = session.stalled && session.silence > 20;
     const status = session.desync ? 'OUT OF SYNC - restart the game' : `online  ${session.frame - session.confirmedFrame}f`;
     drawGame(ctx, s, levels[s.level], levels.length, dt, waiting, { you: net.me, status });
-    if (session.silence > 600) fail('Connection lost.');
+    if (session.silence > 600) { if (net.role === 'host') endSession(); else fail('Connection lost.'); }
   } else if (screen === 'game' && game) {
     acc += dt;
     while (acc >= DT) {
@@ -486,13 +482,10 @@ function frame(now: number) {
     const host = net.role === 'host';
     const set = SETS[host ? menu.set : net.hostSet] ?? SETS[0];
     const lvl = host ? menu.level : net.hostLevel;
-    const full = net.logs.filter((l) => l.peers[1]).length;
     drawLobby(ctx, {
-      role: net.role, status: net.status, code: net.code, typed: net.typed, msg: net.msg, rtt: net.rtt,
-      link: net.code ? inviteLink() : '', copied: net.copied, t: menu.t, row: net.row, starting: !!net.startMsg,
-      setName: set.name, levelName: `${lvl + 1}. ${set.levels[lvl]?.name ?? ''}`,
-      logInfo: !host || !net.logs.length ? ''
-        : `${net.logs.length} game log${net.logs.length > 1 ? 's' : ''} (${full} complete)${net.logsSaved === net.logs.length ? ' - saved' : ''}`,
+      role: net.role, status: net.status, code: net.code, typed: net.typed, msg: net.msg,
+      link: net.code ? inviteLink() : '', copied: net.copied, t: menu.t, row: net.row, starting: !!net.start,
+      setName: set.name, levelName: `${lvl + 1}. ${set.levels[lvl]?.name ?? ''}`, room: roomLine(),
     });
   } else {
     menu.t += dt;

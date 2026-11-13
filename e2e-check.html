@@ -1,62 +1,81 @@
 <!doctype html>
-<!-- Dev-only end-to-end check: two copies of the real game in iframes. Host opens a room,
-     guest joins by invite link, host changes level and starts, they play, pause, resume,
-     quit, and the guest's session log is transferred to the host. ?report=URL to POST result. -->
+<!-- Dev-only end-to-end check: several copies of the real game in iframes (?players=2..4).
+     Host opens a room, guests join by invite link, guests link to each other, host changes
+     level and starts, everyone plays, a guest pauses, the host resumes, a guest quits, and
+     everyone lands back in the lobby. Then a second game. ?report=URL to POST the result. -->
 <meta charset="utf-8" />
-<style>body{margin:0;background:#000} iframe{width:640px;height:360px;border:0}</style>
-<iframe id="a" src="/index.html"></iframe><iframe id="b"></iframe>
-<pre id="out">running</pre>
+<style>body{margin:0;background:#000} iframe{width:480px;height:270px;border:0}</style>
+<div id="frames"></div>
+<pre id="out" style="color:#ccc">running</pre>
 <script type="module">
-  const report = new URLSearchParams(location.search).get('report');
-  const A = document.getElementById('a'), B = document.getElementById('b');
+  const q = new URLSearchParams(location.search);
+  const report = q.get('report'), N = +(q.get('players') ?? 4);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const F = [];
+  const addFrame = (src) => { const f = document.createElement('iframe'); f.src = src; document.getElementById('frames').appendChild(f); F.push(f); return f; };
   const key = (f, code, type = 'keydown') => f.contentWindow.dispatchEvent(new f.contentWindow.KeyboardEvent(type, { code, bubbles: true }));
   const press = async (f, code, hold = 30) => { key(f, code); await sleep(hold); key(f, code, 'keyup'); await sleep(30); };
   const dbg = (f) => f.contentWindow.__dbg;
-  const until = async (what, fn, ms = 20000) => { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout: ' + what); await sleep(50); } };
+  const until = async (what, fn, ms = 25000) => { const t = Date.now(); while (!fn()) { if (Date.now() - t > ms) throw new Error('timeout: ' + what); await sleep(50); } };
   const steps = [];
+  const finish = (res) => {
+    document.getElementById('out').textContent = JSON.stringify(res, null, 1);
+    if (report) fetch(report, { method: 'POST', mode: 'no-cors', body: JSON.stringify(res) });
+  };
   try {
+    const A = addFrame('/index.html');
     await until('host page', () => dbg(A));
     await press(A, 'ArrowUp'); await press(A, 'ArrowRight'); await press(A, 'ArrowRight'); // Play: Host online game
     await press(A, 'Enter');
     await until('room code', () => dbg(A).net.code && dbg(A).net.status === 'waiting');
-    steps.push('room ' + dbg(A).net.code);
-    B.src = '/index.html#' + dbg(A).net.code;
-    await until('guest connected', () => dbg(B) && dbg(B).net.status === 'connected' && dbg(A).net.status === 'connected');
-    steps.push('linked');
+    const code = dbg(A).net.code;
+    for (let i = 1; i < N; i++) {
+      const g = addFrame('/index.html#' + code);
+      await until(`guest ${i} in room`, () => dbg(g) && dbg(g).net.status === 'connected' && dbg(A).net.room.seats().length === i);
+    }
+    steps.push(`${N} players in room ${code}`);
+    await until('everyone knows their seat', () => F.slice(1).every((g, i) => dbg(g).net.seat === i + 1 && dbg(g).net.roster.length === N - 1));
+    if (N > 2) {
+      await until('guests linked to each other', () => F.slice(1).every((g) => dbg(g).net.room.seats().length === N - 1), 30000);
+      steps.push('guests linked directly to each other');
+    }
     await press(A, 'ArrowRight'); // host switches to Hard mode in the lobby
-    await until('guest sees host setting', () => dbg(B).net.hostSet === 1);
+    await until('guests see host setting', () => F.slice(1).every((g) => dbg(g).net.hostSet === 1));
     steps.push('lobby settings synced');
     await press(A, 'ArrowLeft');
-    await press(A, 'Enter');
-    await until('both in game', () => dbg(A).session && dbg(B).session);
-    steps.push('started');
-    for (let i = 0; i < 12; i++) { await press(A, i % 2 ? 'ArrowLeft' : 'ArrowRight', 250); await press(B, i % 3 ? 'ArrowRight' : 'Space', 200); }
-    const sa = dbg(A).session, sb = dbg(B).session;
-    steps.push(`frames ${sa.frame}/${sb.frame} confirmed ${sa.confirmedFrame}/${sb.confirmedFrame}`);
-    if (sa.desync || sb.desync) throw new Error('desync');
-    if (sa.confirmedFrame < 200) throw new Error('game not advancing');
-    await press(B, 'Escape'); // guest pauses
-    await until('paused for both', () => sa.predicted.paused && sb.predicted.paused, 5000);
-    steps.push('paused for both');
+
+    const playOnce = async (label) => {
+      await press(A, 'Enter');
+      await until('all in game', () => F.every((f) => dbg(f).session));
+      const S = F.map((f) => dbg(f).session);
+      if (S.some((s) => s.players !== N)) throw new Error('wrong player count');
+      for (let i = 0; i < 10; i++) for (const [k, f] of F.entries()) await press(f, (i + k) % 3 ? (k % 2 ? 'ArrowLeft' : 'ArrowRight') : 'Space', 120);
+      await until('game advancing', () => S.every((s) => s.confirmedFrame > 150));
+      if (S.some((s) => s.desync)) throw new Error('desync');
+      steps.push(`${label}: frames ${S.map((s) => s.frame).join('/')} confirmed ${S.map((s) => s.confirmedFrame).join('/')}, me ${F.map((f) => dbg(f).net.me).join('/')}`);
+      return S;
+    };
+
+    let S = await playOnce('game 1');
+    await press(F[N - 1], 'Escape'); // last guest pauses
+    await until('paused for all', () => S.every((s) => s.predicted.paused), 6000);
     await press(A, 'Enter'); // host resumes
-    await until('resumed for both', () => !sa.predicted.paused && !sb.predicted.paused, 5000);
-    steps.push('resumed');
+    await until('resumed for all', () => S.every((s) => !s.predicted.paused), 6000);
+    steps.push('pause and resume reached everyone');
+    await press(F[1], 'Escape');
+    await until('paused again', () => S[1].predicted.paused, 6000);
+    await press(F[1], 'KeyQ'); // a guest quits
+    await until('all back in lobby', () => F.every((f) => dbg(f).screen === 'lobby'), 10000);
+    steps.push('guest quit -> everyone back in lobby');
+
+    S = await playOnce('game 2');
     await press(A, 'Escape');
-    await until('paused again', () => sa.predicted.paused, 5000);
-    await press(A, 'KeyQ'); // host quits to lobby
-    await until('both back in lobby', () => dbg(A).screen === 'lobby' && dbg(B).screen === 'lobby', 8000);
-    steps.push('both back in lobby');
-    await until('guest log transferred', () => dbg(A).net.logs.length === 1 && dbg(A).net.logs[0].peers[1], 15000);
-    const log = dbg(A).net.logs[0];
-    steps.push(`log complete: host ${log.peers[0].tick.length} ticks, guest ${log.peers[1].tick.length} ticks`);
-    const stats = log.peers.map((p) => p.end.stats);
-    const res = { ok: true, steps, stats, trace: { format: 'splitstorm-trace', v: 1, sessions: dbg(A).net.logs } };
-    document.getElementById('out').textContent = JSON.stringify({ ...res, trace: undefined }, null, 1);
-    if (report) fetch(report, { method: 'POST', mode: 'no-cors', body: JSON.stringify(res) });
+    await until('paused', () => S[0].predicted.paused, 6000);
+    await press(A, 'KeyQ'); // host quits
+    await until('all back in lobby again', () => F.every((f) => dbg(f).screen === 'lobby'), 10000);
+    steps.push('host quit -> everyone back in lobby');
+    finish({ ok: true, steps, stats: S.map((s) => ({ rollbacks: s.stats.rollbacks, stalled: s.stats.stalled, slowed: s.stats.slowed })) });
   } catch (e) {
-    const res = { ok: false, error: String(e), steps };
-    document.getElementById('out').textContent = JSON.stringify(res, null, 1);
-    if (report) fetch(report, { method: 'POST', mode: 'no-cors', body: JSON.stringify(res) });
+    finish({ ok: false, error: String(e), steps, state: F.map((f) => dbg(f) && ({ screen: dbg(f).screen, status: dbg(f).net.status, seat: dbg(f).net.seat, seats: dbg(f).net.room?.seats(), msg: dbg(f).net.msg })) });
   }
 </script>

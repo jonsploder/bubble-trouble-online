@@ -14,7 +14,7 @@ const json = (body, status = 200, headers = {}) =>
 
 function validHalf(o) {
   return o && o.format === 'splitstorm-half' && o.v === 1
-    && (o.role === 'host' || o.role === 'guest')
+    && typeof o.role === 'string' && /^(host|guest|p[0-3])$/.test(o.role)
     && typeof o.sid === 'string' && /^[A-Z]{4}-\d{1,12}-\d{1,6}$/.test(o.sid)
     && o.meta && Number.isInteger(o.meta.set) && Number.isInteger(o.meta.level) && Number.isInteger(o.meta.seed)
     && o.log && Array.isArray(o.log.tick) && Array.isArray(o.log.in) && Array.isArray(o.log.rx);

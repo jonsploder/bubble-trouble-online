@@ -5,7 +5,7 @@
 // Needs TRACE_URL and TRACE_READ_KEY, from the environment or from .env.local, e.g.
 //   TRACE_URL=https://splitstorm-traces.<you>.workers.dev
 //   TRACE_READ_KEY=<the READ_KEY secret you gave the Worker>
-// Each player uploads their own half; a session is replayable once both halves are here.
+// Each player uploads their own part; a session is replayable once every player's part is here.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -48,17 +48,18 @@ for (const f of fs.readdirSync(halvesDir)) {
   let half;
   try { half = JSON.parse(fs.readFileSync(path.join(halvesDir, f), 'utf8')); } catch { continue; }
   if (half.format !== 'splitstorm-half') continue;
-  const s = sessions.get(half.sid) ?? { meta: half.meta, peers: [null, null] };
-  s.peers[half.role === 'host' ? 0 : 1] = half.log;
+  const s = sessions.get(half.sid) ?? { meta: half.meta, peers: Array.from({ length: half.meta.players ?? 2 }, () => null) };
+  const who = half.role === 'host' ? 0 : half.role === 'guest' ? 1 : +half.role.slice(1);
+  if (who < s.peers.length) s.peers[who] = half.log;
   sessions.set(half.sid, s);
 }
 let complete = 0, written = 0;
 for (const [sid, s] of sessions) {
-  if (!s.peers[0] || !s.peers[1]) continue;
+  if (s.peers.some((p) => !p)) continue;
   complete++;
   const out = path.join('traces', `${s.meta.date.slice(0, 10)}_${sid}.json`);
   if (fs.existsSync(out)) continue;
   fs.writeFileSync(out, JSON.stringify({ format: 'splitstorm-trace', v: 1, sessions: [s] }));
   written++;
 }
-console.log(`${total} log halves on the server, ${fetched} newly downloaded. ${complete} complete sessions (${written} new) in traces/. ${sessions.size - complete} still missing one player's half.`);
+console.log(`${total} player logs on the server, ${fetched} newly downloaded. ${complete} complete sessions (${written} new) in traces/. ${sessions.size - complete} still missing a player's log.`);
