@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- Dev-only: opens a host and a guest in one page, connects them through the real PeerJS
+     broker + WebRTC, and plays 10 seconds of rollback netcode between them. -->
+<meta charset="utf-8" />
+<pre id="out">running</pre>
+<script type="module">
+  import { hostRoom, joinRoom } from './src/net.ts';
+  import { RollbackSession } from './src/rollback.ts';
+  import { SETS } from './src/levels.ts';
+  import { newGame } from './src/sim.ts';
+  const out = document.getElementById('out');
+  const levels = SETS[0].levels;
+  const ses = [null, null];
+  const links = [null, null];
+  const report = new URLSearchParams(location.search).get('report'); // optional: URL to send the result to
+  const done = (o) => {
+    out.textContent = 'RESULT ' + JSON.stringify(o);
+    if (report) fetch(report + '?r=' + encodeURIComponent(JSON.stringify(o)), { mode: 'no-cors' }).catch(() => {});
+  };
+  const begin = () => {
+    if (!links[0] || !links[1] || ses[0]) return;
+    for (const me of [0, 1]) ses[me] = new RollbackSession(levels, me, newGame(levels, 2, 0, 4242), (m) => links[me].send(m));
+    let n = 0;
+    const held = [0, 0];
+    const iv = setInterval(() => {
+      for (const me of [0, 1]) { if (Math.random() < 0.1) held[me] = Math.floor(Math.random() * 8); ses[me].tick(held[me]); }
+      if (++n < 600) return;
+      clearInterval(iv);
+      let compared = 0, mismatched = 0;
+      for (const [f, sum] of ses[0].sums) { const o = ses[1].sums.get(f); if (o !== undefined) { compared++; if (o !== sum) mismatched++; } }
+      done({ ok: compared > 2 && mismatched === 0 && !ses[0].desync && !ses[1].desync, compared, mismatched,
+             confirmed: [ses[0].confirmedFrame, ses[1].confirmedFrame], frames: [ses[0].frame, ses[1].frame] });
+    }, 1000 / 60);
+  };
+  const side = (me) => ({
+    onOpen: (l) => { links[me] = l; begin(); },
+    onData: (m) => ses[me]?.receive(m),
+    onClose: (r) => done({ ok: false, error: r, side: me }),
+  });
+  hostRoom({ ...side(0), onReady: (code) => joinRoom(code, side(1)) });
+</script>
