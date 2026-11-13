@@ -37,6 +37,7 @@ function bot(s: State): number {
 }
 
 function run(level: number, seed: number) {
+  held = IN_FIRE; // the bot's own memory must not leak between runs
   const s = newGame(LV, 1, level, seed);
   const ev: GameEvent[] = [];
   let attempts = 1, ticks = 0;

@@ -231,7 +231,9 @@ function stepPlayers(s: State, inputs: number[], L: Level, ev: GameEvent[], canF
       let active = 0;
       for (const sh of s.shots) if (sh.owner === i && sh.kind === 'wire') active++;
       if (active >= (w === 'twin' ? 2 : 1)) return;
-      s.shots.push({ kind: 'wire', x: p.x, y: H, owner: i, sticky: w === 'anchor', t: 0 });
+      // The tip starts at the top of the head (the line already reaches down to the floor),
+      // so a ball right overhead is hit almost at once.
+      s.shots.push({ kind: 'wire', x: p.x, y: H - PH, owner: i, sticky: w === 'anchor', t: 0 });
       p.cd = 8;
     }
     ev.push({ t: 'shoot', weapon: w });

@@ -9,7 +9,7 @@ import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, newGame, step } from './sim';
 import type { GameEvent, Level, State } from './sim';
 
 /** Both players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 5;
+const VERSION = 6;
 /** Trace collector (see worker/). Empty = don't upload; the host can still save logs by hand. */
 const TRACE_URL = (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];

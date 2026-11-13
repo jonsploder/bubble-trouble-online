@@ -11,6 +11,7 @@
 // the netcode changes. The stats recorded during the live game are printed alongside, so
 // you can see both "what happened then" and "what would happen now".
 import { SETS } from '../src/levels';
+import { tuning } from '../src/rollback';
 import type { NetStats, PeerLog } from '../src/rollback';
 import { badness, describe, simulate } from './netsim';
 import type { PeerScript } from './netsim';
@@ -51,12 +52,15 @@ function lastAtOrBefore(arr: number[], t: number): number {
 const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : 0; };
 const pctl = (a: number[], p: number) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * p))] : 0; };
 
-function replay(name: string, ses: TraceSession): { ok: boolean; bad: number } | null {
+let quiet = false;
+const say = (s: string) => { if (!quiet) console.log(s); };
+
+function replay(name: string, ses: TraceSession): { ok: boolean; bad: number; stats: NetStats[] } | null {
   const [la, lb] = ses.peers;
   const set = SETS[ses.meta.set];
-  if (!la || !lb || !set || !set.levels[ses.meta.level]) { console.log(`skip ${name}: incomplete (needs both players' logs)`); return null; }
+  if (!la || !lb || !set || !set.levels[ses.meta.level]) { say(`skip ${name}: incomplete (needs both players' logs)`); return null; }
   const A = decode(la), B = decode(lb);
-  if (A.ticks.length < 120 || B.ticks.length < 120) { console.log(`skip ${name}: too short`); return null; }
+  if (A.ticks.length < 120 || B.ticks.length < 120) { say(`skip ${name}: too short`); return null; }
 
   // Raw "delay" of each packet is measured across two unsynchronised clocks. Assuming the
   // fastest packet each way took equally long (as NTP does) gives the clock offset.
@@ -66,7 +70,7 @@ function replay(name: string, ses: TraceSession): { ok: boolean; bad: number } |
     return m;
   };
   const ab = raw(B.rx, A.ticks), ba = raw(A.rx, B.ticks);
-  if (ab.size < 30 || ba.size < 30) { console.log(`skip ${name}: almost no packets got through`); return null; }
+  if (ab.size < 30 || ba.size < 30) { say(`skip ${name}: almost no packets got through`); return null; }
   const off = (Math.min(...ab.values()) - Math.min(...ba.values())) / 2; // B's clock minus A's
   const bTicks = B.ticks.map((t) => t - off);
   const delays = [new Map<number, number>(), new Map<number, number>()];
@@ -89,33 +93,78 @@ function replay(name: string, ses: TraceSession): { ok: boolean; bad: number } |
   };
   const bad = badness(r.stats[0]) + badness(r.stats[1]);
   const ok = !r.desync && r.mismatched === 0;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}  ${set.name} level ${ses.meta.level + 1}, ${secs.toFixed(0)}s, recorded on v${ses.meta.version}`);
-  console.log(`       link: host->guest ${link(0, A.ticks.length)}, guest->host ${link(1, B.ticks.length)}, start offset ${(bTicks[0] - A.ticks[0]).toFixed(0)}ms`);
+  say(`${ok ? 'ok  ' : 'FAIL'} ${name}  ${set.name} level ${ses.meta.level + 1}, ${secs.toFixed(0)}s, recorded on v${ses.meta.version}`);
+  say(`       link: host->guest ${link(0, A.ticks.length)}, guest->host ${link(1, B.ticks.length)}, start offset ${(bTicks[0] - A.ticks[0]).toFixed(0)}ms`);
   const live = [la.end?.stats, lb.end?.stats] as (NetStats | undefined)[];
   ['host ', 'guest'].forEach((who, i) => {
-    if (live[i]) console.log(`       ${who} then: ${describe(live[i]!)}`);
-    console.log(`       ${who} now:  ${describe(r.stats[i])}`);
+    if (live[i]) say(`       ${who} then: ${describe(live[i]!)}`);
+    say(`       ${who} now:  ${describe(r.stats[i])}`);
   });
   const liveBad = live[0] && live[1] ? (badness(live[0]) + badness(live[1])).toFixed(3) : 'n/a';
-  console.log(`       badness then ${liveBad} -> now ${bad.toFixed(3)}${r.desync ? '   DESYNC IN REPLAY' : ''}`);
-  return { ok, bad };
+  say(`       badness then ${liveBad} -> now ${bad.toFixed(3)}${r.desync ? '   DESYNC IN REPLAY' : ''}`);
+  return { ok, bad, stats: r.stats };
 }
 
-const dir = process.argv[2] ?? 'traces';
+const args = process.argv.slice(2);
+const sweep = args.includes('--sweep');
+const dir = args.find((a) => !a.startsWith('--')) ?? 'traces';
 const files: string[] = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f: string) => f.endsWith('.json')).sort() : [];
-if (!files.length) { console.log(`No traces in ${dir}/. Save session logs from the host's lobby (L) and drop the files there.`); process.exit(0); }
-let total = 0, count = 0, allOk = true;
+if (!files.length) { console.log(`No traces in ${dir}/. Run "npm run fetch-traces", or save session logs from the host's lobby (L) and drop the files there.`); process.exit(0); }
+const sessions: { name: string; ses: TraceSession }[] = [];
 for (const f of files) {
   let data: { format?: string; sessions?: TraceSession[] };
   try { data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { console.log(`skip ${f}: not valid JSON`); continue; }
   if (data.format !== 'splitstorm-trace' || !data.sessions) { console.log(`skip ${f}: not a trace file`); continue; }
-  data.sessions.forEach((ses, i) => {
-    const res = replay(`${f} #${i + 1}`, ses);
-    if (!res) return;
-    count++;
-    total += res.bad;
-    if (!res.ok) allOk = false;
-  });
+  data.sessions.forEach((ses, i) => sessions.push({ name: `${f} #${i + 1}`, ses }));
 }
-console.log(`\n${count} session(s) replayed. Mean badness ${(count ? total / count : 0).toFixed(3)} (lower is better; 0 = no freezes, slowdowns or visible corrections).`);
-process.exit(allOk ? 0 : 1);
+
+/** Replay everything with the current `tuning`; returns totals across all sessions and players. */
+function runAll() {
+  const T = { n: 0, ok: true, bad: 0, ticks: 0, stalled: 0, slowed: 0, rollbacks: 0, rollbackFrames: 0, maxRollback: 0, confirmed: 0, errSum: 0, errFrames: 0 };
+  for (const { name, ses } of sessions) {
+    const res = replay(name, ses);
+    if (!res) continue;
+    T.n++;
+    T.bad += res.bad;
+    if (!res.ok) T.ok = false;
+    for (const s of res.stats) {
+      T.ticks += s.ticks; T.stalled += s.stalled; T.slowed += s.slowed; T.rollbacks += s.rollbacks; T.rollbackFrames += s.rollbackFrames;
+      T.maxRollback = Math.max(T.maxRollback, s.maxRollback); T.confirmed += s.confirmed; T.errSum += s.errSum; T.errFrames += s.errFrames;
+    }
+  }
+  return T;
+}
+const row = (label: string, T: ReturnType<typeof runAll>) =>
+  `${label.padEnd(34)} badness ${(T.bad / Math.max(1, T.n)).toFixed(3)}  frozen ${(100 * T.stalled / T.ticks).toFixed(2)}%  slowed ${(100 * T.slowed / T.ticks).toFixed(2)}%  ` +
+  `rollback avg ${(T.rollbackFrames / Math.max(1, T.rollbacks)).toFixed(2)}f max ${T.maxRollback}f  other-player error avg ${(T.errSum / T.confirmed).toFixed(2)}px, >8px ${(100 * T.errFrames / T.confirmed).toFixed(2)}%${T.ok ? '' : '  DESYNC'}`;
+
+if (sweep) {
+  // Try alternative settings against every recorded session. One knob at a time, rest at defaults.
+  quiet = true;
+  const base = { ...tuning };
+  const variants: [string, Partial<typeof tuning>][] = [
+    ['current settings', {}],
+    ['input delay 1 (16ms)', { inputDelay: 1 }],
+    ['input delay 3 (50ms)', { inputDelay: 3 }],
+    ['input delay 4 (67ms)', { inputDelay: 4 }],
+    ['input delay 5 (83ms)', { inputDelay: 5 }],
+    ['slow down later (30f)', { softAhead: 30 }],
+    ['slow down sooner (12f)', { softAhead: 12 }],
+    ['clock sync gentler (gain .006)', { rateGain: 0.006 }],
+    ['clock sync firmer (gain .02)', { rateGain: 0.02 }],
+    ['clock sync wider deadband (1.5f)', { deadband: 1.5 }],
+    ['clock sync slower estimate (.03)', { offsetSmooth: 0.03 }],
+    ['deadband 1.5 + estimate .03', { deadband: 1.5, offsetSmooth: 0.03 }],
+  ];
+  console.log(`${sessions.length} sessions\n`);
+  for (const [label, change] of variants) {
+    Object.assign(tuning, base, change);
+    console.log(row(label, runAll()));
+  }
+  process.exit(0);
+}
+
+const T = runAll();
+console.log(`\n${T.n} session(s) replayed. Mean badness ${(T.bad / Math.max(1, T.n)).toFixed(3)} (lower is better; 0 = no freezes, slowdowns or visible corrections).`);
+console.log(row('all sessions, current netcode:', T));
+process.exit(T.ok ? 0 : 1);

@@ -16,10 +16,20 @@
 import { IN_PAUSE, step } from './sim';
 import type { GameEvent, Level, State } from './sim';
 
-export const INPUT_DELAY = 2;
-/** Frames ahead of confirmed at which we start slowing down / stop entirely. */
-const SOFT_AHEAD = 18;
-const HARD_AHEAD = 60;
+/** Tunable netcode parameters. scripts/replay.ts --sweep tries alternatives against recorded sessions. */
+export const tuning = {
+  /** Frames between pressing a key and it taking effect (hides that much network latency). */
+  // 3 chosen from 58 recorded Sydney-Japan sessions: halves visible corrections vs 2.
+  inputDelay: 3,
+  /** Frames ahead of confirmed at which we start slowing down / stop entirely. */
+  softAhead: 18,
+  hardAhead: 60,
+  /** Clock sync: speed change per frame of offset, the offset we tolerate, and estimate smoothing. */
+  rateGain: 0.012,
+  deadband: 0.5,
+  offsetSmooth: 0.08,
+};
+export const INPUT_DELAY = tuning.inputDelay;
 const CHECK_EVERY = 120;
 
 export interface InputMsg {
@@ -112,7 +122,7 @@ export class RollbackSession {
   constructor(private levels: Level[], private me: number, initial: State, private send: (m: InputMsg) => void) {
     this.confirmed = initial;
     this.predicted = JSON.parse(JSON.stringify(initial));
-    for (let i = 0; i < INPUT_DELAY; i++) this.local.push(0);
+    for (let i = 0; i < tuning.inputDelay; i++) this.local.push(0);
     this.log = { me, tick: [], in: [], rx: [], stall: [], rb: [], rate: [] };
   }
 
@@ -125,7 +135,7 @@ export class RollbackSession {
     if (input !== this.lastIn) { this.log.in.push(n, input); this.lastIn = input; }
 
     this.silence++;
-    this.stalled = this.frame - this.confirmedFrame >= HARD_AHEAD;
+    this.stalled = this.frame - this.confirmedFrame >= tuning.hardAhead;
     if (this.stalled) {
       this.stats.stalled++;
       this.log.stall.push(n);
@@ -159,7 +169,7 @@ export class RollbackSession {
       // Both sides measure "my frame minus the newest frame I've seen from you". Each is
       // inflated by the same latency, so half the difference is the true clock offset.
       const d = (this.frame - m.f - m.adv) / 2;
-      this.offset = this.heard ? this.offset + (d - this.offset) * 0.08 : d;
+      this.offset = this.heard ? this.offset + (d - this.offset) * tuning.offsetSmooth : d;
       this.heard = true;
     }
     if (m.cf > 0) {
@@ -189,10 +199,10 @@ export class RollbackSession {
     let r = 1;
     if (this.heard) {
       const d = Math.max(-8, Math.min(8, this.offset));
-      if (Math.abs(d) > 0.5) r -= d * 0.012; // ahead of the peer: ease off; behind: hurry up
+      if (Math.abs(d) > tuning.deadband) r -= d * tuning.rateGain; // ahead of the peer: ease off; behind: hurry up
     }
     const ahead = this.frame - this.confirmedFrame;
-    if (ahead > SOFT_AHEAD) r *= Math.max(0.3, 1 - (ahead - SOFT_AHEAD) / (HARD_AHEAD - SOFT_AHEAD));
+    if (ahead > tuning.softAhead) r *= Math.max(0.3, 1 - (ahead - tuning.softAhead) / (tuning.hardAhead - tuning.softAhead));
     this.rate = r;
     if (r < 0.97) this.stats.slowed++;
     const pct = Math.round(r * 100);
