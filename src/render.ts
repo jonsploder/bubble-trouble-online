@@ -20,6 +20,31 @@ const PICK: Record<PickupKind, { c: string; label: string; name: string }> = {
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; c: string }
 const particles: Particle[] = [];
+
+/** Touch devices get tap-flavoured prompts and a close button. */
+let touch = false;
+export function setTouch(v: boolean) { touch = v; }
+/** Top-right close/back button (touch only), in view coordinates. */
+export const CLOSE_BTN = { x: W - 56, y: 8, w: 48, h: 48 };
+
+function closeButton(ctx: CanvasRenderingContext2D) {
+  if (!touch) return;
+  const b = CLOSE_BTN;
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(b.x + 16, b.y + 16); ctx.lineTo(b.x + 32, b.y + 32);
+  ctx.moveTo(b.x + 32, b.y + 16); ctx.lineTo(b.x + 16, b.y + 32);
+  ctx.stroke();
+}
+
+export function drawRotate(ctx: CanvasRenderingContext2D) {
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  text(ctx, 'TURN YOUR PHONE SIDEWAYS', W / 2, VIEW_H / 2, 54, '#ffd43b');
+}
 let shake = 0;
 
 export function fxEvents(ev: GameEvent[]) {
@@ -257,11 +282,13 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
     if (net) text(ctx, `You are ${net.you === 0 ? 'blue' : 'pink'}`, W / 2, 275, 16, PLAYER_COL[net.you]);
     text(ctx, L.name, W / 2, 190, 40);
     if (L.hint) text(ctx, L.hint, W / 2, 235, 16, '#cfd4ff', 'center', 400);
+    if (touch) text(ctx, 'Left thumb: slide to move      Right thumb: hold to fire', W / 2, 320, 15, '#8a90c7', 'center', 400);
   } else if (s.phase === 'clear') text(ctx, 'CLEAR!', W / 2, 200, 48, '#8ce99a');
-  else if (s.phase === 'over') overlay(ctx, 'GAME OVER', '#ff6b6b', `Score ${s.score}  -  Enter: ${net ? 'lobby' : 'menu'}`);
-  else if (s.phase === 'won') overlay(ctx, 'YOU WIN', '#ffd43b', `Score ${s.score}  -  Enter: ${net ? 'lobby' : 'menu'}`);
+  else if (s.phase === 'over') overlay(ctx, 'GAME OVER', '#ff6b6b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
+  else if (s.phase === 'won') overlay(ctx, 'YOU WIN', '#ffd43b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
   if (banner === 'pause') overlay(ctx, 'PAUSED', '#fff', 'P: resume   Esc: menu');
-  if (banner === 'wait') overlay(ctx, 'WAITING', '#fff', 'for the other player...   Esc: lobby');
+  if (banner === 'wait') overlay(ctx, 'WAITING', '#fff', touch ? 'for the other player...' : 'for the other player...   Esc: lobby');
+  closeButton(ctx);
 }
 
 /** Round pickup token with a drawn icon. `r` is the token radius. */
@@ -360,8 +387,8 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   text(ctx, 'pop them all. mind the little ones.', W / 2, 162, 16, '#cfd4ff', 'center', 400);
   const rows = [`Levels:   <  ${m.setName}  >`, `Start at: <  ${m.levelName}  >`, `Play:     <  ${m.modeName}  >`];
   rows.forEach((r, i) => text(ctx, r, W / 2, 250 + i * 44, 22, m.row === i ? '#ffd43b' : '#8a90c7'));
-  text(ctx, 'Enter: go', W / 2, 400, 22, '#8ce99a');
-  text(ctx, 'P1: arrows + Space      P2: A / D + W      P: pause   Esc: menu', W / 2, H + 30, 14, '#8a90c7', 'center', 400);
+  text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, 400, touch ? 26 : 22, '#8ce99a');
+  text(ctx, touch ? 'Tap a row to change it' : 'P1: arrows + Space      P2: A / D + W      P: pause   Esc: menu', W / 2, H + 30, 14, '#8a90c7', 'center', 400);
 }
 
 export interface LobbyView {
@@ -384,7 +411,7 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
       sub('Room code', 150);
       text(ctx, v.code.split('').join(' '), W / 2, 205, 64, '#ffd43b');
       sub(v.link, 262, '#8a90c7');
-      sub(v.copied ? 'Invite link copied.' : 'C: copy invite link', 290, v.copied ? '#8ce99a' : '#cfd4ff');
+      sub(v.copied ? 'Invite link copied.' : touch ? 'Tap here to share the invite link' : 'C: copy invite link', 290, v.copied ? '#8ce99a' : '#cfd4ff');
       if (v.status === 'connected') {
         text(ctx, `Friend connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 345, 20, '#8ce99a');
         sub(`${v.setName}  -  ${v.levelName}`, 378);
@@ -399,6 +426,12 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   else {
     text(ctx, `Connected${v.rtt >= 0 ? `  (${v.rtt} ms)` : ''}`, W / 2, 205, 24, '#8ce99a');
     sub(`Waiting for the host to start${dots}`, 250);
+  }
+  if (touch) {
+    foot = v.status === 'error' ? 'Tap to try again' : v.role === 'host' && v.status === 'connected' ? 'TAP HERE TO START' : v.status === 'enter' ? 'Tap to type the code' : '';
+    text(ctx, foot, W / 2, 430, 24, '#8ce99a');
+    closeButton(ctx);
+    return;
   }
   text(ctx, foot, W / 2, H + 30, 14, '#8a90c7', 'center', 400);
 }
