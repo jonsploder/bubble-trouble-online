@@ -373,6 +373,9 @@ function menuKey(code: string) {
   }
 }
 
+/** The tower as drawn: floors above `top` locked, and only the level names this player has seen. */
+const towerView = (top: number) => FLOORS.map((f, i) => ({ name: f.name, locked: i > top, levels: f.levels.map((L, k) => (seen(i, k) ? L.name : '')) }));
+
 /** Is this level of the selected floor one the player has seen? */
 const seen = (floor: number, k: number) => FLOOR_START[floor] + k <= reach;
 
@@ -394,6 +397,7 @@ function lobbyKey(code: string) {
   }
   if (net.role === 'host') {
     if (code === 'ArrowUp' || code === 'ArrowDown') net.row = 1 - net.row;
+    if (MODES[menu.gmode].id === 'versus') net.row = 1; // versus has no floor to pick
     const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
     if (d && !net.start && net.row === 0) menu.floor = Math.max(0, Math.min(partyFloor(), menu.floor + d));
     if (d && !net.start && net.row === 1) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
@@ -482,11 +486,15 @@ function tapUI(x: number, y: number): boolean {
   if (screen === 'lobby') {
     if (close) lobbyKey('Escape');
     else if (net.status === 'error') lobbyKey('Enter');
-    else if (net.role === 'host') {
-      if (near(LOBBY_Y.link, 30) && net.code) shareInvite();
+    else if (net.role === 'host' && net.code) {
+      const U = TOWER_UI;
+      if (x < U.listX - 30) { // a floor of the tower
+        const f = FLOORS.length - 1 - Math.floor((y - U.top) / (U.slabH + U.gap));
+        if (f >= 0 && f <= partyFloor() && !net.start) menu.floor = f;
+      } else if (near(LOBBY_Y.link, 24)) shareInvite();
       else if (near(LOBBY_Y.floor)) { net.row = 0; lobbyKey(dir); }
       else if (near(LOBBY_Y.mode)) { net.row = 1; lobbyKey(dir); }
-      else if (y > LOBBY_Y.start - 24) lobbyKey('Enter');
+      else if (y > LOBBY_Y.start - 20) lobbyKey('Enter');
     } else if (net.status === 'enter') {
       const typed = (window.prompt('Room code (4 letters)') ?? '').trim();
       if (/^[A-Za-z]{4}$/.test(typed)) { net.typed = typed.toUpperCase(); connectJoin(); }
@@ -587,20 +595,17 @@ function frame(now: number) {
   } else if (screen === 'lobby') {
     menu.t += dt;
     const host = net.role === 'host';
+    const reached = host ? partyFloors() : Object.keys(net.floors).sort((a, b) => +a - +b).map((k) => net.floors[+k]);
     drawLobby(ctx, {
       role: net.role, status: net.status, code: net.code, typed: net.typed, msg: net.msg,
       link: net.code ? inviteLink() : '', copied: net.copied, t: menu.t, row: net.row, starting: !!net.start,
       floor: host ? Math.min(menu.floor, partyFloor()) : net.hostFloor, room: roomLine(),
-      reached: host ? partyFloors() : Object.keys(net.floors).map((k) => net.floors[+k]),
+      reached, floors: towerView(reached.length ? Math.min(...reached) : floorOf(reach)),
       modeName: MODES[host ? menu.gmode : net.hostMode]?.name ?? '', modeHint: MODES[host ? menu.gmode : net.hostMode]?.hint ?? '',
     });
   } else if (screen === 'tower') {
     menu.t += dt;
-    const top = floorOf(reach);
-    drawTower(ctx, {
-      t: menu.t, floor: menu.floor, level: menu.level,
-      floors: FLOORS.map((f, i) => ({ name: f.name, locked: i > top, levels: f.levels.map((L, k) => (seen(i, k) ? L.name : '')) })),
-    });
+    drawTower(ctx, { t: menu.t, floor: menu.floor, level: menu.level, floors: towerView(floorOf(reach)) });
   } else {
     menu.t += dt;
     drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode] });

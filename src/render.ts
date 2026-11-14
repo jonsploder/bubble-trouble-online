@@ -619,15 +619,12 @@ export interface TowerView {
   level: number; // selected level on it; 0 = climb from the checkpoint, anything else is practice
 }
 
-export function drawTower(ctx: CanvasRenderingContext2D, v: TowerView) {
-  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
-  ctx.fillStyle = '#07080f';
-  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  const U = TOWER_UI, n = v.floors.length;
-  text(ctx, 'THE TOWER', U.cx - U.w / 2, 50, 30, '#fff', 'left');
-  v.floors.forEach((f, i) => {
+/** The tower itself: one slab per floor, top floor at the top. `marks` puts a player-coloured pip on the floor each player has reached. */
+function drawSlabs(ctx: CanvasRenderingContext2D, floors: TowerView['floors'], sel: number, marks: number[] = []) {
+  const U = TOWER_UI, n = floors.length;
+  floors.forEach((f, i) => {
     const w = U.w * (1 - i * 0.04), x = U.cx - w / 2, y = U.top + (n - 1 - i) * (U.slabH + U.gap);
-    const on = i === v.floor;
+    const on = i === sel;
     ctx.fillStyle = f.locked ? '#0b0c18' : '#1b1e3d';
     ctx.fillRect(x, y, w, U.slabH);
     ctx.lineWidth = 2;
@@ -651,9 +648,27 @@ export function drawTower(ctx: CanvasRenderingContext2D, v: TowerView) {
         if (name) ctx.fill(); else ctx.stroke();
       });
     }
+    // players who have reached this floor, as small figures hanging off the slab's left edge
+    let m = 0;
+    marks.forEach((r, p) => {
+      if (r !== i) return;
+      ctx.fillStyle = PLAYER_COL[p % PLAYER_COL.length];
+      const px = x - 8 - m++ * 8, py = y + U.slabH / 2;
+      ctx.beginPath(); ctx.arc(px, py - 6, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillRect(px - 3, py - 2, 6, 10);
+    });
   });
   ctx.fillStyle = '#2b2f55';
   ctx.fillRect(U.cx - U.w / 2 - 12, U.top + n * (U.slabH + U.gap), U.w + 24, 4);
+}
+
+export function drawTower(ctx: CanvasRenderingContext2D, v: TowerView) {
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const U = TOWER_UI;
+  text(ctx, 'THE TOWER', U.cx - U.w / 2, 50, 30, '#fff', 'left');
+  drawSlabs(ctx, v.floors, v.floor);
 
   const f = v.floors[v.floor];
   text(ctx, `FLOOR ${v.floor + 1}`, U.listX, 100, 13, '#ffa94d', 'left');
@@ -676,64 +691,107 @@ export interface LobbyView {
   modeName: string;
   modeHint: string;
   link: string; copied: boolean; t: number;
-  /** The floor the host has picked, and the floor each player in the room has reached. */
+  /** The floor the host has picked, and the floor each player in the room has reached (seat order). */
   floor: number; reached: number[];
+  /** The tower as this player sees it, with floors above the lowest player's locked. */
+  floors: TowerView['floors'];
   /** Host: which settings row is selected. */
   row: number;
   starting: boolean;
 }
 
-/** Vertical positions of the lobby's tappable lines (view coordinates). */
-export const LOBBY_Y = { link: 222, floor: 322, mode: 366, start: 446 };
+/** Vertical positions of the lobby's tappable lines (view coordinates). The room's settings sit right of the tower. */
+export const LOBBY_Y = { link: 107, floor: 158, mode: 392, start: 474 };
+
+/** Splits `s` into lines no wider than `w` at the current font. */
+function wrap(ctx: CanvasRenderingContext2D, s: string, size: number, w: number): string[] {
+  ctx.font = `400 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+  const out: string[] = [];
+  let line = '';
+  for (const word of s.split(' ')) {
+    const t = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(t).width > w) { out.push(line); line = word; } else line = t;
+  }
+  if (line) out.push(line);
+  return out;
+}
 
 export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
-  backdrop(ctx, v.t);
   const dots = '.'.repeat(1 + (Math.floor(v.t * 2) % 3));
-  const sub = (s: string, y: number, c = '#cfd4ff') => text(ctx, s, W / 2, y, 16, c, 'center', 400);
   const host = v.role === 'host';
-  const settings = (editable: boolean) => {
-    const row = (label: string, value: string, y: number, on: boolean) =>
-      text(ctx, editable ? `${label} <  ${value}  >` : `${label} ${value}`, W / 2, y, 20, on ? '#ffd43b' : '#8a90c7');
-    row('Floor:', String(v.floor + 1), LOBBY_Y.floor, editable && v.row === 0);
-    if (v.reached.length > 1) text(ctx, v.reached.map((r) => r + 1).join('  ·  '), W / 2, LOBBY_Y.floor + 20, 12, '#8a90c7', 'center', 400);
-    row('Mode: ', v.modeName, LOBBY_Y.mode, editable && v.row === 1);
-    if (v.modeHint && v.modeName !== 'Classic') text(ctx, v.modeHint, W / 2, LOBBY_Y.mode + 26, 13, '#8a90c7', 'center', 400);
-  };
+  const inRoom = host ? v.status === 'waiting' || v.status === 'connected' : v.status === 'connected';
+  if (inRoom) { drawRoom(ctx, v, dots); return; }
+
+  backdrop(ctx, v.t);
+  const sub = (s: string, y: number, c = '#cfd4ff') => text(ctx, s, W / 2, y, 16, c, 'center', 400);
   text(ctx, host ? 'HOST A GAME' : 'JOIN A GAME', W / 2, 62, 36);
   let foot = 'Esc: back', action = '';
   if (v.status === 'error') {
     text(ctx, v.msg, W / 2, 220, 20, '#ff6b6b');
     foot = 'Enter: try again   Esc: back';
     action = 'Tap to try again';
-  } else if (host) {
-    if (v.status === 'opening') sub(`Opening a room${dots}`, 220);
-    else {
-      sub('Room code', 104);
-      text(ctx, v.code.split('').join(' '), W / 2, 150, 56, '#ffd43b');
-      sub(v.link, LOBBY_Y.link - 14, '#8a90c7');
-      sub(v.copied ? 'Invite link copied.' : touch ? 'Tap here to share the invite link' : 'C: copy invite link', LOBBY_Y.link + 10, v.copied ? '#8ce99a' : '#cfd4ff');
-      if (v.status === 'connected') {
-        text(ctx, v.starting ? `Starting${dots}` : v.room, W / 2, 278, 20, '#8ce99a');
-        foot = 'Arrows: change   Enter: start   Esc: close room';
-        action = 'TAP HERE TO START';
-      } else sub(`Waiting for friends to join${dots}  (up to 4 players)`, 278);
-      settings(true);
-    }
-  } else if (v.status === 'enter') {
+  } else if (host) sub(`Opening a room${dots}`, 220);
+  else if (v.status === 'enter') {
     sub('Type the room code', 150);
     text(ctx, (v.typed + '____').slice(0, 4).split('').join(' '), W / 2, 215, 64, '#ffd43b');
     foot = v.typed.length === 4 ? 'Enter: connect   Esc: back' : 'Esc: back';
     action = 'Tap to type the code';
-  } else if (v.status === 'connecting') sub(`Connecting to room ${v.code}${dots}`, 220);
-  else {
-    text(ctx, v.room || 'Connected', W / 2, 190, 24, '#8ce99a');
-    sub(`Waiting for the host to start${dots}`, 235);
-    settings(false);
-  }
+  } else sub(`Connecting to room ${v.code}${dots}`, 220);
   if (touch) {
-    text(ctx, action, W / 2, LOBBY_Y.start, 24, '#8ce99a');
+    text(ctx, action, W / 2, 446, 24, '#8ce99a');
     closeButton(ctx);
   } else text(ctx, foot, W / 2, H + 30, 14, '#8a90c7', 'center', 400);
+}
+
+/** Inside a room: the shared tower on the left, the room and its settings on the right. */
+function drawRoom(ctx: CanvasRenderingContext2D, v: LobbyView, dots: string) {
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const U = TOWER_UI, X = U.listX, host = v.role === 'host', versus = v.modeName === 'Versus';
+  text(ctx, 'THE TOWER', U.cx - U.w / 2, 50, 30, '#fff', 'left');
+  if (versus) ctx.globalAlpha = 0.3; // versus makes its own arenas
+  drawSlabs(ctx, v.floors, v.floor, v.reached);
+  ctx.globalAlpha = 1;
+
+  text(ctx, 'ROOM', X, 40, 13, '#8a90c7', 'left');
+  text(ctx, v.code.split('').join(' '), X + 52, 42, 30, '#ffd43b', 'left');
+  if (host) {
+    text(ctx, v.link, X, LOBBY_Y.link - 10, 11, '#8a90c7', 'left', 400);
+    text(ctx, v.copied ? 'Invite link copied.' : touch ? 'Tap here to share the invite link' : 'C: copy invite link', X, LOBBY_Y.link + 8, 13, v.copied ? '#8ce99a' : '#cfd4ff', 'left', 400);
+  }
+
+  const edit = host && !v.starting;
+  const row = (label: string, y: number, on: boolean) => text(ctx, edit ? `<  ${label}  >` : label, X, y, 20, on ? '#ffd43b' : '#8a90c7', 'left');
+  if (!versus) {
+    const f = v.floors[v.floor];
+    row(`Floor ${v.floor + 1}`, LOBBY_Y.floor, edit && v.row === 0);
+    text(ctx, f.name, X, LOBBY_Y.floor + 30, 22, '#fff', 'left');
+    f.levels.forEach((name, k) => {
+      const y = LOBBY_Y.floor + 58 + k * 20;
+      text(ctx, String(k + 1), X, y, 12, '#8a90c7', 'left', 400);
+      text(ctx, name || '? ? ?', X + 22, y, 14, name ? '#e8eaf6' : '#5b6090', 'left', 400);
+    });
+  }
+  row(v.modeName, LOBBY_Y.mode, edit && v.row === 1);
+  if (v.modeName !== 'Classic') wrap(ctx, v.modeHint, 12, W - X - 24).slice(0, 2).forEach((l, i) => text(ctx, l, X, LOBBY_Y.mode + 22 + i * 15, 12, '#8a90c7', 'left', 400));
+
+  let foot = 'Esc: leave', action = '';
+  if (host && v.status === 'connected') {
+    text(ctx, v.starting ? `Starting${dots}` : v.room, X, 450, 14, '#8ce99a', 'left', 400);
+    foot = 'Up/Down: setting   Left/Right: change   Enter: start   Esc: close room';
+    action = v.starting ? '' : 'TAP HERE TO START';
+  } else if (host) {
+    text(ctx, `Waiting for friends to join${dots}`, X, 450, 14, '#cfd4ff', 'left', 400);
+    foot = 'Up/Down: setting   Left/Right: change   Esc: close room';
+  } else {
+    text(ctx, v.room || 'Connected', X, 450, 14, '#8ce99a', 'left', 400);
+    text(ctx, `Waiting for the host to start${dots}`, X, LOBBY_Y.start, 16, '#cfd4ff', 'left', 400);
+  }
+  if (touch) {
+    if (action) text(ctx, action, X, LOBBY_Y.start, 22, '#8ce99a', 'left');
+    closeButton(ctx);
+  } else text(ctx, foot, W / 2, H + 44, 13, '#8a90c7', 'center', 400);
 }
 
 /** Gun bearer (a harpoon held up, gold) or VIP (a crown) marker drawn over a player. */
