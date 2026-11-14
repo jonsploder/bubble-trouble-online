@@ -52,10 +52,10 @@ export const CAMPAIGN: Level[] = [
   },
   {
     name: 'Squeeze',
-    hint: 'The roof is coming down. Every pop shoves it back.',
-    time: 70,
+    hint: 'The roof is coming down. Be quick.',
+    time: 60,
     start: [440, 520, 400, 560],
-    ceiling: { speed: 8, lift: 10 },
+    ceiling: { speed: 8, lift: 0 },
     balls: [
       { x: 260, y: 200, size: 3, dir: 1 },
       { x: 700, y: 200, size: 3, dir: -1 },
@@ -66,6 +66,7 @@ export const CAMPAIGN: Level[] = [
     hint: 'Rapid fire. Too rapid, maybe.',
     time: 75,
     weapon: 'pulse',
+    spikes: false, // with spikes, one shot at the top of its bounce sends both halves into the roof
     start: [140, 80],
     drops: ['shield', 'slow'],
     dropRate: 0.1,
