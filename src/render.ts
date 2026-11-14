@@ -417,11 +417,17 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
       drawToken(ctx, p.weapon, hx, H + 42, 11);
       ctx.globalAlpha = p.lives > 0 ? 1 : 0.3;
     }
+    // lives on top, the weapon's name underneath
     const label = s.mode === 'revive' ? '' : p.lives > 0 ? '♥'.repeat(p.lives) : 'out';
-    text(ctx, label, hx + 18, H + 43, p.lives > 0 ? 17 : 13, PLAYER_COL[i % PLAYER_COL.length], 'left');
-    const after = hx + 18 + (label.length ? label.length * 11 + 8 : 0);
-    if (s.mode === 'versus') text(ctx, '★'.repeat(p.wins) + '☆'.repeat(Math.max(0, VERSUS_WINS - p.wins)), after, H + 43, 14, '#ffd43b', 'left');
-    else if (p.haste > 0) text(ctx, 'HASTE', after, H + 43, 11, '#fcc419', 'left');
+    const ly = p.vip ? H + 43 : H + 36;
+    text(ctx, label, hx + 18, ly, p.lives > 0 ? 15 : 12, PLAYER_COL[i % PLAYER_COL.length], 'left');
+    const after = hx + 18 + (label.length ? label.length * 10 + 6 : 0);
+    if (s.mode === 'versus') text(ctx, '★'.repeat(p.wins) + '☆'.repeat(Math.max(0, VERSUS_WINS - p.wins)), after, ly, 13, '#ffd43b', 'left');
+    else if (p.haste > 0) text(ctx, 'HASTE', after, ly, 11, '#fcc419', 'left');
+    if (!p.vip) {
+      if (!p.armed) ctx.globalAlpha *= 0.4;
+      text(ctx, PICK[p.weapon].name, hx + 18, H + 52, 12, PICK[p.weapon].c, 'left', 400);
+    }
     ctx.globalAlpha = 1;
   });
 
