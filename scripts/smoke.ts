@@ -74,4 +74,16 @@ for (const set of SETS) {
     console.log(`${String(i + 1).padStart(2)} ${L.name.padEnd(24)} ${a.cleared ? 'cleared' : 'NOT CLEARED'} attempts=${String(a.attempts).padStart(2)} deterministic=${det}`);
   });
 }
+// Fair starts: for 1 to 4 players, nobody who simply stands still may be hit in the first 1.2 s of play.
+for (const set of SETS) {
+  set.levels.forEach((L, i) => {
+    for (let n = 1; n <= 4; n++) {
+      const s = newGame(set.levels, n, i, 7);
+      const ev: GameEvent[] = [];
+      for (let t = 0; t < 100 + 72; t++) step(s, [0, 0, 0, 0], set.levels, ev);
+      if (ev.some((e) => e.t === 'die')) { ok = false; console.log(`UNFAIR START: ${set.name} ${i + 1} ${L.name}, ${n} players`); }
+    }
+  });
+}
+console.log(ok ? 'All levels beatable, deterministic and fair at the start.' : 'FAILED');
 process.exit(ok ? 0 : 1);

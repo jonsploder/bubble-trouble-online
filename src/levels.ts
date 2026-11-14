@@ -54,6 +54,7 @@ export const CAMPAIGN: Level[] = [
     name: 'Squeeze',
     hint: 'The roof is coming down. Every pop shoves it back.',
     time: 70,
+    start: [440, 520, 400, 560],
     ceiling: { speed: 8, lift: 10 },
     balls: [
       { x: 260, y: 200, size: 3, dir: 1 },
@@ -73,7 +74,7 @@ export const CAMPAIGN: Level[] = [
   {
     name: 'Quickstep',
     time: 60,
-    start: [340, 620],
+    start: [460, 540, 500, 520],
     balls: [
       { x: 160, y: 220, size: 2, dir: 1, fast: true },
       { x: 480, y: 160, size: 2, dir: -1, fast: true },
@@ -84,7 +85,7 @@ export const CAMPAIGN: Level[] = [
     name: 'Jailbreak',
     hint: 'Clear the room and the cages open.',
     time: 90,
-    start: [370, 590],
+    start: [380, 460, 340, 500],
     rects: [
       { x: 292, y: 0, w: 16, h: 480, gate: 1 },
       { x: 652, y: 0, w: 16, h: 480, gate: 1 },
@@ -104,7 +105,7 @@ export const CAMPAIGN: Level[] = [
     dropRate: 0.35,
     balls: [
       { x: 200, y: 170, size: 4, dir: 1 },
-      { x: 760, y: 170, size: 4, dir: -1 },
+      { x: 760, y: 190, size: 3, dir: -1 },
     ],
   },
   {
@@ -137,6 +138,7 @@ export const CAMPAIGN: Level[] = [
   {
     name: 'Pinball',
     time: 100,
+    start: [460, 540, 620, 700],
     rects: [
       { x: 170, y: 272, w: 60, h: 18 },
       { x: 450, y: 260, w: 60, h: 18 },
@@ -153,10 +155,10 @@ export const CAMPAIGN: Level[] = [
   {
     name: 'Laser Surgery',
     hint: 'The beam cuts through everything. The spikes do the rest.',
-    time: 60,
+    time: 70,
     weapon: 'beam',
     spikes: true,
-    ceiling: { speed: 9, lift: 4 },
+    ceiling: { speed: 8, lift: 4 },
     drops: ['shield'],
     start: [480, 400],
     balls: [
@@ -231,6 +233,7 @@ export const HARD: Level[] = [
     name: 'Upside Down',
     hint: 'Gravity flips every six seconds.',
     time: 90,
+    start: [440, 520, 400, 560],
     flip: 6,
     balls: [
       { x: 250, y: 200, size: 3, dir: 1 },
@@ -244,7 +247,7 @@ export const HARD: Level[] = [
     wind: 55,
     start: [480, 400],
     balls: [
-      { x: 150, y: 170, size: 4, dir: 1 },
+      { x: 150, y: 190, size: 3, dir: 1 },
       { x: 620, y: 220, size: 2, dir: -1 },
       { x: 820, y: 200, size: 2, dir: -1 },
     ],
@@ -300,6 +303,7 @@ export const HARD: Level[] = [
     name: 'Weathervane',
     hint: 'Wind and gravity, both against you.',
     time: 110,
+    start: [500, 560, 480, 540],
     wind: 50,
     flip: 7,
     balls: [
@@ -326,6 +330,7 @@ export const HARD: Level[] = [
   {
     name: 'Vertigo',
     time: 100,
+    start: [440, 540, 400, 580],
     spin: 7,
     ceiling: { speed: 6, lift: 9 },
     balls: [
@@ -340,7 +345,7 @@ export const HARD: Level[] = [
     weapon: 'beam',
     drops: ['beam', 'pulse', 'shield'],
     dropRate: 0.25,
-    start: [480, 330],
+    start: [430, 550, 240, 730],
     balls: [
       { x: 100, y: 200, size: 2, dir: 1, armor: 1 },
       { x: 250, y: 260, size: 2, dir: -1, armor: 1 },
@@ -357,7 +362,7 @@ export const HARD: Level[] = [
     flip: 9,
     wind: 35,
     ramp: 0.005,
-    start: [300, 660],
+    start: [300, 440, 280, 480],
     drops: ['twin', 'anchor', 'shield', 'slow', 'time', 'life', 'beam'],
     balls: [
       { x: 480, y: 200, size: 5, dir: 1, armor: 1 },
@@ -367,19 +372,32 @@ export const HARD: Level[] = [
   },
 ];
 
-// Twists: each idea gets a short run of levels on its own before they are mixed.
+// Twists: a curriculum. Each idea is introduced alone and gently, developed once, and only
+// then mixed with the others, two at a time, before a finale that uses everything.
 //  portals: [ax, ay, bx, by] pairs, two-way. A ball coming out of a portal in the top half drops out.
 //  chain:   [[x, y], ...] numbered portals, one-way: 1 -> 2 -> 3 -> ... -> back to 1
-//  split:   pieces per pop (level-wide, or per ball)
+//  split:   pieces per pop (level-wide, or per ball); the number is drawn on the ball
 //  playerSpeed / 'haste' drops: you run faster than you'd like
+//  still:   a ball that bounces on the spot
 // Floor portals sit at y 440 so rolling and bouncing balls actually pass through them.
+// Balance is checked with `npm run balance -- twists` (a human-like bot); see README.
+
+/** A row of small balls bouncing on the spot, optionally under caps that make the bounce quick. */
+function drumLine(xs: number[], capUnderside: (k: number) => number, phase: (k: number) => number) {
+  return {
+    rects: xs.flatMap((x, k) => (capUnderside(k) ? [{ x: x - 15, y: capUnderside(k) - 10, w: 30, h: 10 }] : [])),
+    balls: xs.map((x, k) => ({ x, y: 424 + phase(k), size: 0, dir: 1 as const, still: true })),
+  };
+}
+const row = (n: number, from: number, gap: number) => Array.from({ length: n }, (_, k) => from + k * gap);
+
 export const TWISTS: Level[] = [
-  // --- portals, one idea at a time
+  // ---------------------------------------------------------------- 1. portals
   {
     name: 'Wormhole',
     hint: 'A ball that rolls into the orange portal drops out of the blue one, high up.',
     time: 70,
-    start: [620, 700],
+    start: [620, 700, 580, 660],
     portals: [[150, 436, 760, 130]],
     balls: [
       { x: 330, y: 260, size: 3, dir: -1 },
@@ -390,167 +408,240 @@ export const TWISTS: Level[] = [
     name: 'Return Trip',
     hint: 'Portals work both ways. Off one side, on the other.',
     time: 80,
-    start: [440, 520],
+    start: [440, 520, 360, 600],
     portals: [[60, 440, 900, 440]],
     balls: [
       { x: 220, y: 240, size: 3, dir: -1 },
-      { x: 740, y: 240, size: 2, dir: 1 },
     ],
   },
   {
     name: 'Round Robin',
     hint: 'Numbered portals go one way: 1 to 2, 2 to 3, and 3 back to 1.',
     time: 90,
-    start: [400, 560],
+    start: [320, 640, 260, 700],
     chain: [[80, 440], [480, 120], [880, 440]],
     balls: [
-      { x: 260, y: 240, size: 3, dir: -1 },
-      { x: 700, y: 260, size: 2, dir: 1 },
+      { x: 240, y: 240, size: 3, dir: -1 },
+      { x: 720, y: 260, size: 2, dir: 1 },
     ],
   },
-  // --- splits
+  // ---------------------------------------------------------------- 2. timing
+  {
+    name: 'Metronome',
+    hint: 'They bounce on the spot. Step under one while it\'s up, fire, step out.',
+    time: 60,
+    dropRate: 0,
+    start: [60, 110, 160, 210],
+    ...drumLine(row(5, 320, 130), () => 0, () => 0),
+  },
+  // ---------------------------------------------------------------- 3. splits
   {
     name: 'Triplets',
-    hint: 'These split three ways. The middle one bounces straight up and down.',
-    time: 80,
+    hint: 'The 3 on a ball means it splits three ways. The middle piece bounces on the spot, like a metronome.',
+    time: 70,
     split: 3,
-    start: [200, 140],
-    balls: [{ x: 600, y: 190, size: 3, dir: -1 }],
+    start: [200, 140, 260, 80],
+    balls: [{ x: 640, y: 220, size: 2, dir: -1 }],
+  },
+  {
+    name: 'Three\'s a Crowd',
+    hint: 'Two of them now. Finish one family before starting the next.',
+    time: 90,
+    split: 3,
+    start: [480, 400, 560, 320],
+    balls: [
+      { x: 160, y: 220, size: 2, dir: 1 },
+      { x: 800, y: 260, size: 1, dir: -1 },
+    ],
   },
   {
     name: 'Quadruplets',
-    hint: 'Four ways now.',
-    time: 90,
+    hint: 'Four ways. Two of the pieces come almost straight back down: pop, then step aside.',
+    time: 70,
     split: 4,
-    start: [480, 400],
+    start: [480, 400, 560, 320],
     balls: [
-      { x: 200, y: 220, size: 2, dir: 1 },
-      { x: 760, y: 220, size: 2, dir: -1 },
+      { x: 140, y: 260, size: 1, dir: 1 },
+      { x: 820, y: 260, size: 1, dir: -1 },
     ],
   },
   {
     name: 'Mixed Bag',
-    hint: 'The number on a ball is how many pieces it splits into.',
+    hint: 'Read the numbers. Which one do you want to open first?',
     time: 100,
-    start: [480, 400],
+    start: [520, 600, 440, 680],
     balls: [
-      { x: 160, y: 200, size: 3, dir: 1, split: 2 },
-      { x: 480, y: 160, size: 2, dir: -1, split: 4 },
-      { x: 800, y: 200, size: 3, dir: -1, split: 3 },
+      { x: 100, y: 260, size: 1, dir: 1, split: 4 },
+      { x: 240, y: 200, size: 2, dir: 1, split: 2 },
+      { x: 880, y: 220, size: 2, dir: -1, split: 3 },
     ],
   },
-  // --- speed you can't control
+  // ---------------------------------------------------------------- 4. speed
   {
     name: 'Too Much Coffee',
-    hint: 'Lightning drops make you run far too fast. Try not to step on them.',
-    time: 80,
-    drops: ['haste', 'haste', 'haste', 'time'],
-    dropRate: 0.4,
-    balls: [
-      { x: 220, y: 200, size: 3, dir: 1 },
-      { x: 740, y: 200, size: 3, dir: -1 },
-    ],
+    hint: 'Lightning drops make you run far too fast for a few seconds. Step round them.',
+    time: 70,
+    drops: ['haste'],
+    dropRate: 0.35,
+    start: [200, 140, 260, 80],
+    balls: [{ x: 660, y: 200, size: 3, dir: -1 }],
   },
   {
     name: 'Express',
-    hint: 'You\'re fast. Too fast.',
-    time: 80,
-    playerSpeed: 1.7,
-    ceiling: { speed: 6, lift: 8 },
+    hint: 'This time you\'re fast the whole way through. Tap, don\'t hold.',
+    time: 70,
+    playerSpeed: 1.5,
+    dropRate: 0,
+    start: [480, 400, 560, 320],
     balls: [
-      { x: 180, y: 240, size: 2, dir: 1, fast: true },
-      { x: 480, y: 180, size: 3, dir: -1 },
-      { x: 780, y: 240, size: 2, dir: -1, fast: true },
+      { x: 160, y: 240, size: 2, dir: 1 },
+      { x: 800, y: 240, size: 2, dir: -1 },
     ],
   },
-  // --- drops you don't want
+  // ---------------------------------------------------------------- 5. drops you don't want
   {
     name: 'Butterfingers',
-    hint: 'Every drop is a curse. Don\'t touch them.',
+    hint: 'Every drop is a curse: a gun that pops too much, or lightning. Leave them on the floor.',
     time: 90,
     weapon: 'twin',
     drops: ['beam', 'pulse', 'haste', 'beam', 'pulse'],
-    dropRate: 0.45,
-    start: [480, 420],
+    dropRate: 0.4,
+    start: [480, 400, 560, 320],
     balls: [
-      { x: 160, y: 230, size: 2, dir: 1 },
-      { x: 360, y: 190, size: 3, dir: 1 },
-      { x: 600, y: 190, size: 3, dir: -1 },
-      { x: 800, y: 230, size: 2, dir: -1 },
+      { x: 140, y: 200, size: 3, dir: 1 },
+      { x: 820, y: 240, size: 2, dir: -1 },
+    ],
+  },
+  // ---------------------------------------------------------------- 6. two ideas at a time
+  {
+    name: 'Flip Side',
+    hint: 'When gravity flips, the balls bounce on the roof, and the high portal is the one they fall into.',
+    time: 100,
+    flip: 7,
+    start: [480, 400, 560, 320],
+    portals: [[140, 436, 820, 60]],
+    balls: [
+      { x: 280, y: 240, size: 3, dir: -1 },
+      { x: 700, y: 240, size: 3, dir: 1 },
+    ],
+  },
+  {
+    name: 'Espresso Shot',
+    hint: 'Fast feet and a wormhole: what you just popped is about to land somewhere else.',
+    time: 80,
+    playerSpeed: 1.5,
+    dropRate: 0,
+    start: [560, 640, 480, 400],
+    portals: [[120, 436, 800, 130]],
+    balls: [
+      { x: 300, y: 240, size: 3, dir: -1 },
+    ],
+  },
+  {
+    name: 'Hall of Mirrors',
+    hint: 'Four portals in one loop, and a gate. Your side first.',
+    time: 110,
+    start: [200, 130, 270, 340],
+    rects: [{ x: 472, y: 0, w: 16, h: 480, gate: 1 }],
+    chain: [[60, 440], [700, 130], [900, 440], [260, 130]],
+    balls: [
+      { x: 420, y: 200, size: 3, dir: 1, group: 1 },
+      { x: 700, y: 240, size: 2, dir: 1, split: 3 },
+    ],
+  },
+  {
+    name: 'Split Ends',
+    hint: 'Three-way splits, and the floor portals keep bringing them back round.',
+    time: 100,
+    split: 3,
+    start: [440, 520, 360, 600],
+    portals: [[60, 440, 900, 440]],
+    balls: [
+      { x: 240, y: 220, size: 2, dir: -1 },
     ],
   },
   {
     name: 'Do Not Touch',
     hint: 'Three-way splits, and every drop is the wrong gun.',
-    time: 110,
-    split: 3,
-    drops: ['beam', 'pulse'],
-    dropRate: 0.35,
-    start: [80, 140],
-    balls: [
-      { x: 480, y: 200, size: 3, dir: 1 },
-      { x: 760, y: 260, size: 1, dir: -1, fast: true },
-    ],
-  },
-  // --- timing
-  {
-    name: 'Drum Line',
-    hint: 'Ten little ones, bouncing on the spot. Step under, fire, step out.',
-    time: 70,
-    dropRate: 0,
-    start: [30, 70],
-    // a short cap over each ball keeps its bounce low and quick
-    rects: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => ({ x: 120 + k * 80 - 15, y: 400, w: 30, h: 10 })),
-    balls: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => ({ x: 120 + k * 80, y: 424 + ((k * 13) % 48), size: 0, dir: 1 as const, still: true })),
-  },
-  // --- mixing it up
-  {
-    name: 'Split Ends',
-    hint: 'Three-way splits, and the floor portals keep sending them round.',
     time: 100,
     split: 3,
-    start: [440, 520],
-    portals: [[60, 440, 900, 440]],
-    balls: [{ x: 480, y: 220, size: 3, dir: 1 }],
+    drops: ['beam', 'pulse'],
+    dropRate: 0.3,
+    start: [480, 400, 560, 320],
+    balls: [
+      { x: 160, y: 220, size: 2, dir: 1 },
+      { x: 800, y: 240, size: 1, dir: -1 },
+    ],
+  },
+  {
+    name: 'Jitterbug',
+    hint: 'Fast feet and three-way splits. The ones bouncing on the spot are the ones you\'ll run into.',
+    time: 80,
+    playerSpeed: 1.25,
+    split: 3,
+    dropRate: 0,
+    start: [200, 140, 260, 80],
+    balls: [{ x: 660, y: 220, size: 2, dir: -1 }],
   },
   {
     name: 'Numbers Game',
     hint: 'Every pop lifts the roof. Fours lift it most, but make the most mess.',
-    time: 110,
-    ceiling: { speed: 7, lift: 6 },
-    start: [440, 520],
+    time: 100,
+    ceiling: { speed: 4, lift: 9 },
+    start: [480, 400, 560, 320],
     balls: [
-      { x: 140, y: 220, size: 3, dir: 1, split: 4 },
-      { x: 480, y: 180, size: 3, dir: -1, split: 2 },
-      { x: 820, y: 220, size: 3, dir: -1, split: 3 },
+      { x: 140, y: 260, size: 1, dir: -1, split: 4 },
+      { x: 820, y: 240, size: 2, dir: 1, split: 2 },
+      { x: 660, y: 240, size: 2, dir: 1, split: 3 },
     ],
   },
   {
-    name: 'Hall of Mirrors',
-    hint: 'Four portals in one loop, and a gate.',
-    time: 110,
-    start: [230, 160],
-    rects: [{ x: 472, y: 0, w: 16, h: 480, gate: 1 }],
-    chain: [[60, 440], [700, 130], [900, 440], [260, 130]],
+    name: 'Through Traffic',
+    hint: 'A row of metronomes, and one ball that keeps coming round through the portals.',
+    time: 90,
+    dropRate: 0,
+    start: [400, 250, 100, 60],
+    portals: [[50, 440, 910, 440]],
+    ...(() => {
+      const d = drumLine([180, 330, 630, 780], () => 0, (k) => (k * 19) % 48);
+      return { rects: d.rects, balls: [...d.balls, { x: 480, y: 200, size: 2, dir: 1 as const }] };
+    })(),
+  },
+  {
+    name: 'Drum Line',
+    hint: 'Ten of them, out of step, and the caps make them quick. The last five are quicker.',
+    time: 80,
+    dropRate: 0,
+    start: [30, 70, 30, 70],
+    ...drumLine(row(10, 120, 80), (k) => (k < 5 ? 406 : 410), (k) => (k * 13) % 48),
+  },
+  // ---------------------------------------------------------------- 7. three at a time, then everything
+  {
+    name: 'Revolving Door',
+    hint: 'A portal loop, mixed splits and lightning on the floor.',
+    time: 120,
+    chain: [[80, 440], [480, 120], [880, 440]],
+    drops: ['haste', 'haste', 'shield', 'time'],
+    dropRate: 0.25,
+    start: [400, 560, 320, 640],
     balls: [
-      { x: 300, y: 240, size: 3, dir: -1, group: 1 },
-      { x: 700, y: 240, size: 3, dir: 1 },
+      { x: 240, y: 240, size: 2, dir: -1, split: 3 },
+      { x: 720, y: 240, size: 3, dir: 1, split: 2 },
     ],
   },
   {
     name: 'Chaos Theory',
     hint: 'Everything at once.',
     time: 150,
-    split: 3,
-    ramp: 0.004,
+    ramp: 0.003,
     chain: [[70, 440], [480, 120], [890, 440]],
     drops: ['haste', 'shield', 'twin', 'beam', 'time', 'life'],
     dropRate: 0.25,
-    start: [400, 560],
+    start: [340, 620, 280, 680],
     balls: [
-      { x: 260, y: 220, size: 3, dir: -1 },
-      { x: 700, y: 220, size: 3, dir: 1, split: 2 },
-      { x: 480, y: 330, size: 1, dir: 1, fast: true },
+      { x: 200, y: 220, size: 3, dir: -1, split: 2 },
+      { x: 760, y: 220, size: 2, dir: 1, split: 3 },
+      { x: 480, y: 180, size: 1, dir: 1, split: 4 },
     ],
   },
 ];

@@ -36,7 +36,14 @@ restarts; the level restarts once everyone is down. Single-player games are alwa
 ## Level sets
 
 - **Campaign** (16) and **Hard mode** (13): the main game, then gravity flips, armoured balls, wind, spin and moving blocks.
-- **Twists** (9): portals (a ball entering the orange one comes out of the blue one, and the other way round), balls that split into 3 or 4, levels where you run too fast, and levels whose drops are curses: the lightning **haste** pickup (8 s of uncontrollably fast running) and the beam / pulse guns, which pop far more than you want.
+- **Twists** (22): a curriculum. Each idea is introduced alone, developed once, then mixed two at a time, then all together:
+  1. *Portals*: Wormhole (floor portal to sky exit), Return Trip (two-way), Round Robin (numbered one-way loop).
+  2. *Timing*: Metronome (balls that bounce on the spot: step under, fire, step out).
+  3. *Splits*: Triplets, Three's a Crowd, Quadruplets, Mixed Bag. The number on a ball is how many pieces it splits into; the middle piece of a three-way split bounces on the spot, which is why timing comes first.
+  4. *Speed*: Too Much Coffee (lightning **haste** drops: 8 s of running 1.8x faster), Express (fast all level).
+  5. *Cursed drops*: Butterfingers (beam, pulse gun, haste: leave them on the floor).
+  6. *Mixes*: Flip Side (gravity flips + portals), Espresso Shot (speed + portals), Hall of Mirrors (portal loop + gate + splits), Split Ends (splits + portals), Do Not Touch (splits + cursed drops), Jitterbug (speed + splits), Numbers Game (mixed splits + descending roof), Through Traffic (timing + portals), Drum Line (ten quick on-the-spot bouncers under caps).
+  7. *Finale*: Revolving Door, Chaos Theory.
 
 The pause screen lists every mode's rules. The results screen hands out awards: **Most reckless** (time spent within 16 px of a ball), **Closest shave** (smallest gap to a ball that didn't hit you) and **Sharpshooter** (pops per shot).
 
@@ -118,10 +125,22 @@ Ideas not yet tried:
   big ones; tune the 0.4 easing in `render.ts`.
 - **Lobby room**: refuse or warn when one player's ping is far worse than everyone else's.
 
+## Level balance
+
+```bash
+npm run balance                # every set; add a set id (twists) and/or attempts per level (32)
+```
+
+The smoke-test bot has perfect reflexes, so it only proves a level is *possible*. `npm run balance` plays every level with a deliberately human-like bot (it reacts about 130 ms late, misjudges ball positions by a few pixels, presses and releases keys a little late, and avoids cursed drops) and reports, per level: pops needed, share of attempts cleared on one life, typical clear time, when it tends to die, and how often portals get used.
+
+It was calibrated against real play: on the first version of Twists, real players cleared the portal levels first try and almost never cleared the original Triplets (0 of 6), Quadruplets (0 of 4) or Butterfingers (0 of 6); the bot reproduces that pattern. Read its clear rate as "a decent player, per attempt". Known blind spot: it cannot line up under balls that bounce on the spot, so it badly underrates people on Metronome, Drum Line and Through Traffic; those are checked with the perfect bot and by their timing windows instead (Metronome: 0.45 s safe per 0.75 s bounce; Drum Line: 0.28 s, then 0.20 s for the last five).
+
+Targets used for Twists: introductions 60-80%, developments 40-60%, mixes 35-60%, finale 25-40%. Once real level stats accumulate (`npm run report`), trust those over the bot.
+
 ## Tests
 
 ```bash
-npm run smoke     # a look-ahead bot plays every level: all must be beatable and deterministic
+npm run smoke     # a perfect-reflex bot plays every level: all must be beatable, deterministic, and fair at the start (nobody standing still is hit in the first 1.2 s, for 1-4 players)
 npm run nettest   # 14 simulated network scenarios, 2-4 players
 ```
 
