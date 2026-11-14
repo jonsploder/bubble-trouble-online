@@ -9,7 +9,7 @@ import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 14;
+const VERSION = 15;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];

@@ -102,7 +102,7 @@ export const CAMPAIGN: Level[] = [
     hint: 'Not every gift is a favour.',
     time: 90,
     start: [480, 400],
-    drops: ['beam', 'pulse', 'beam', 'anchor'],
+    drops: ['beam', 'pulse', 'beam'],
     dropRate: 0.35,
     balls: [
       { x: 200, y: 170, size: 4, dir: 1 },
