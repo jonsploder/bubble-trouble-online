@@ -646,8 +646,46 @@ export const TWISTS: Level[] = [
   },
 ];
 
+/** Levels built around one odd weapon each. */
+export const EXTRA: Level[] = [
+  { name: 'Point Blank', time: 150, weapon: 'stub', drops: [], start: [200, 760, 160, 800], balls: [{ x: 480, y: 140, size: 5, dir: 1 }] },
+  { name: 'Light Show', time: 80, weapon: 'lance', drops: ['lance', 'rocket'], dropRate: 0.25, start: [440, 520, 400, 560],
+    balls: [{ x: 240, y: 160, size: 3, dir: 1 }, { x: 720, y: 160, size: 3, dir: -1 }] },
+  { name: 'En Garde', time: 90, weapon: 'sword', drops: [], start: [440, 520, 400, 560],
+    balls: [{ x: 200, y: 200, size: 2, dir: 1 }, { x: 760, y: 200, size: 2, dir: -1 }] },
+  { name: 'Broadside', time: 90, weapon: 'side', drops: [], start: [440, 520, 400, 560],
+    balls: [{ x: 220, y: 180, size: 3, dir: 1 }, { x: 740, y: 200, size: 2, dir: -1 }] },
+  { name: 'Arms Race', time: 100, drops: ['sword', 'side', 'rocket', 'lance', 'stub'], dropRate: 0.4, start: [440, 520, 400, 560],
+    balls: [{ x: 200, y: 160, size: 4, dir: 1 }, { x: 760, y: 180, size: 3, dir: -1 }] },
+];
+
+// The Tower: every level in one climb. Each floor opens on a new idea, and is a checkpoint.
+const byName = new Map([...CAMPAIGN, ...HARD, ...TWISTS, ...EXTRA].map((L) => [L.name, L]));
+const floor = (name: string, levels: string[]) => ({
+  name,
+  levels: levels.map((n) => { const L = byName.get(n); if (!L) throw new Error(`no level called ${n}`); return L; }),
+});
+export const FLOORS = [
+  floor('Ground Floor', ['Warm-Up', 'Two-Way Street', 'The Big One', 'Open Sesame', 'Overhang', 'Squeeze', 'Trigger Happy', 'Quickstep']),
+  floor('The Workshop', ['Jailbreak', 'Careful What You Grab', 'Convoy', 'Pressure Cooker', 'Pinball', 'Laser Surgery', 'Rush Hour', 'Last Stand']),
+  floor('Portal Gallery', ['Wormhole', 'Return Trip', 'Round Robin', 'Metronome', 'Through Traffic', 'Drum Line']),
+  floor('Split Level', ['Triplets', "Three's a Crowd", 'Quadruplets', 'Mixed Bag', 'Split Ends', 'Numbers Game', 'Hall of Mirrors']),
+  floor('The Armoury', ['Point Blank', 'Light Show', 'En Garde', 'Broadside', 'Arms Race']),
+  floor('Heavy Weather', ['Tin Cans', 'Down Under', 'Upside Down', 'Headwind', 'Cannonballs', 'Weathervane', 'Flip Side']),
+  floor('Machine Room', ['Carousel', 'Elevator', 'Crusher', 'Lockdown', 'Vertigo', 'Minefield']),
+  floor('Overclocked', ['Too Much Coffee', 'Express', 'Butterfingers', 'Espresso Shot', 'Do Not Touch', 'Jitterbug']),
+  floor('Summit', ['Revolving Door', 'Eye of the Storm', 'Chaos Theory']),
+];
+export const TOWER: Level[] = FLOORS.flatMap((f, i) => f.levels.map((L) => ({ ...L, floor: i + 1 })));
+/** Index in TOWER of each floor's first level. */
+export const FLOOR_START = FLOORS.map((_, i) => FLOORS.slice(0, i).reduce((a, f) => a + f.levels.length, 0));
+if (TOWER.length !== byName.size) throw new Error('every level must be on exactly one floor');
+
+// The first three are the sets the tower was built from; old session logs still refer to them by position.
 export const SETS = [
   { id: 'campaign', name: 'Campaign', levels: CAMPAIGN },
   { id: 'hard', name: 'Hard mode', levels: HARD },
   { id: 'twists', name: 'Twists', levels: TWISTS },
+  { id: 'tower', name: 'The Tower', levels: TOWER },
 ];
+export const TOWER_SET = 3;

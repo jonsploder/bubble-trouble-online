@@ -33,9 +33,15 @@ export const IN_FIRE = 4;
 /** Sent for a single tick: toggles pause for everyone. */
 export const IN_PAUSE = 8;
 
-export type Weapon = 'harpoon' | 'twin' | 'anchor' | 'pulse' | 'beam';
+/**
+ * stub: a harpoon that only reaches a little above your head. sword: a swipe in front of you.
+ * side: a bolt along the floor, picking up speed. rocket: the same, straight up.
+ * lance: a long thin bar of light that travels up.
+ */
+export type Weapon = 'harpoon' | 'twin' | 'anchor' | 'pulse' | 'beam' | 'stub' | 'sword' | 'side' | 'rocket' | 'lance';
 /** 'haste' is a curse: it makes you run much faster than you can control for a while. */
-export type PickupKind = Weapon | 'shield' | 'slow' | 'time' | 'life' | 'haste';
+/** 'master' (roped modes only): the holder can drag their neighbours along by the rope. */
+export type PickupKind = Weapon | 'shield' | 'slow' | 'time' | 'life' | 'haste' | 'master';
 
 export interface BallDef { x: number; y: number; size: number; dir: 1 | -1; fast?: boolean; group?: number; /** Pieces it pops into (default: the level's `split`, else 2). */ split?: number; /** Bounces straight up and down. */ still?: boolean; /** Hits needed before it will pop; each hit punts it upward instead. */ armor?: number }
 export interface RectDef {
@@ -47,6 +53,8 @@ export interface Block extends RectDef { bx: number; by: number }
 
 export interface Level {
   name: string;
+  /** Tower floor (1-based). Reaching a new floor refills everyone's lives. */
+  floor?: number;
   hint?: string;
   time: number; // seconds
   balls: BallDef[];
@@ -84,24 +92,36 @@ export interface Level {
 export interface Ball { x: number; y: number; vx: number; vy: number; size: number; fast: boolean; group: number; immune: number; armor: number; split: number;
   /** Ticks before it can use a portal again. */
   pcd: number }
-export interface Shot { kind: 'wire' | 'bullet' | 'beam'; x: number; y: number; owner: number; sticky: boolean; t: number }
+export interface Shot { kind: 'wire' | 'bullet' | 'beam' | 'slash' | 'dartx' | 'darty' | 'lance'; x: number; y: number; owner: number; sticky: boolean; t: number;
+  /** Darts: current speed (signed). Slash: the way it faces. */
+  v: number;
+  /** Wire: highest point it may reach (0 = the roof). */
+  lim: number }
 export interface Pickup { x: number; y: number; kind: PickupKind; t: number }
 /** Game modes. Single-player games are always classic. */
-export type Mode = 'classic' | 'onegun' | 'vip' | 'versus' | 'tethered' | 'revive';
+export type Mode = 'classic' | 'onegun' | 'vip' | 'versus' | 'tethered' | 'revive' | 'duo';
 export const MODES: { id: Mode; name: string; hint: string }[] = [
   { id: 'classic', name: 'Classic', hint: 'Everyone shoots. Each player has their own 3 lives.' },
-  { id: 'onegun', name: 'One Gun', hint: 'Only one player can shoot. When they fall, the gun passes to someone at random.' },
-  { id: 'vip', name: 'Protect the VIP', hint: 'The VIP (crown) cannot shoot. If the VIP is hit, everyone loses a life.' },
+  { id: 'onegun', name: 'One Gun', hint: 'Roped together. Only one player can shoot. When they fall, the gun passes to someone at random.' },
+  { id: 'vip', name: 'Protect the VIP', hint: 'Roped together. The VIP (crown) cannot shoot. If the VIP is hit, everyone loses a life.' },
   { id: 'versus', name: 'Versus', hint: 'Each player gets a lane. Balls you pop split into your rivals\' lanes. Clear yours first; first to 3 rounds wins.' },
   { id: 'tethered', name: 'Tethered', hint: 'Players are roped together and can only get so far apart.' },
+  { id: 'duo', name: 'Two Heads', hint: 'Two players, one body: one moves, one shoots. You swap every level.' },
   { id: 'revive', name: 'Revive', hint: 'Shared lives. Revive a fallen teammate by standing in their circle within 15 s. All must be up to finish.' },
 ];
 /** Revive mode: how long a fallen player waits, the size of their circle, and how long reviving takes. */
 export const REVIVE_TICKS = 15 * 60;
 export const REVIVE_R = 34;
 export const REVIVE_NEED = 90;
-/** Tethered mode: longest the rope between neighbouring players can stretch. */
-export const TETHER = 240;
+/** Roped modes: longest the rope between neighbouring players can stretch. */
+export const TETHER = 170;
+/** Modes in which neighbouring players are roped together. */
+export const roped = (m: Mode) => m === 'tethered' || m === 'onegun' || m === 'vip';
+/** Reach of the short harpoon above the head, the sword in front, and the lance's length. */
+export const STUB_REACH = 48;
+export const SWORD_REACH = 46;
+export const LANCE_LEN = 96;
+const DART_V0 = 150, DART_ACC = 1400, LANCE_SPEED = 800;
 /** Versus: round wins needed to win the game. */
 export const VERSUS_WINS = 3;
 
@@ -130,6 +150,10 @@ export interface Player { x: number; face: number; weapon: Weapon; cd: number; s
   rp: number;
   /** Versus: rounds won. */
   wins: number;
+  /** Roped modes: holds the rope and can drag neighbours along. */
+  master: boolean;
+  /** Two Heads: the player whose body this one rides in as the gunner (-1 = has a body of their own). */
+  ride: number;
 }
 
 export type Phase = 'ready' | 'play' | 'dead' | 'clear' | 'over' | 'won';
@@ -221,7 +245,7 @@ export function levelAt(s: State, levels: Level[]): Level {
   return s.mode === 'versus' ? versusArena(s.level, s.players.length) : levels[s.level];
 }
 
-const DEFAULT_DROPS: PickupKind[] = ['twin', 'anchor', 'harpoon', 'shield', 'slow', 'time'];
+const DEFAULT_DROPS: PickupKind[] = ['twin', 'anchor', 'harpoon', 'shield', 'slow', 'time', 'rocket', 'lance'];
 
 function rand(s: State): number {
   // mulberry32
@@ -239,7 +263,7 @@ export function newGame(levels: Level[], numPlayers: number, startLevel = 0, see
     players: [], mode: numPlayers > 1 ? mode : 'classic', hist: [], lost: 0, team: 3,
   };
   for (let i = 0; i < numPlayers; i++) s.players.push({ x: W / 2, face: 1, weapon: 'harpoon', cd: 0, shield: false, invuln: 0, lives: 3, down: false,
-    armed: true, vip: false, haste: 0, rt: 0, rp: 0, wins: 0,
+    armed: true, vip: false, haste: 0, rt: 0, rp: 0, wins: 0, master: false, ride: -1,
     st: { pops: 0, score: 0, alive: 0, deaths: 0, shots: 0, picks: 0, danger: 0, shave: 999, revives: 0 } });
   if (s.mode === 'versus') s.level = 0;
   loadLevel(s, levels);
@@ -266,7 +290,7 @@ function loadLevel(s: State, levels: Level[]) {
     const st = L.start;
     p.x = !st ? W / 2 + (i - (n - 1) / 2) * 70 : i < st.length ? st[i] : Math.min(W - PW / 2, st[i % st.length] + 34);
     // roped together: start side by side
-    if (s.mode === 'tethered') p.x = Math.max(PW / 2, Math.min(W - PW / 2, (st?.[0] ?? W / 2) + (i - (n - 1) / 2) * 50));
+    if (roped(s.mode)) p.x = Math.max(PW / 2, Math.min(W - PW / 2, (st?.[0] ?? W / 2) + (i - (n - 1) / 2) * 50));
     p.down = s.mode === 'revive' ? false : p.lives <= 0;
     p.haste = 0;
     p.rt = 0;
@@ -276,7 +300,22 @@ function loadLevel(s: State, levels: Level[]) {
     p.cd = 0;
     p.shield = false;
     p.invuln = 0;
+    p.master = false;
+    p.ride = -1;
   });
+  if (s.mode === 'duo') {
+    // pairs share a body; who moves and who shoots swaps every level. An odd player out plays alone.
+    const bodies = Math.ceil(n / 2);
+    for (let k = 0; k < bodies; k++) {
+      const st = L.start;
+      const x = st ? (k < st.length ? st[k] : st[k % st.length] + 34) : W / 2 + (k - (bodies - 1) / 2) * 70;
+      const a = 2 * k, b = a + 1;
+      s.players[a].x = x;
+      if (b >= n) continue;
+      s.players[b].x = x;
+      s.players[s.level % 2 ? a : b].ride = s.level % 2 ? b : a;
+    }
+  }
   s.lost = 0;
   assignRoles(s);
 }
@@ -340,25 +379,36 @@ function pop(s: State, i: number, L: Level, ev: GameEvent[], by?: Player) {
     }
   }
   if (rand(s) < (L.dropRate ?? 0.14)) {
-    const pool = L.drops ?? DEFAULT_DROPS;
+    let pool = L.drops ?? DEFAULT_DROPS;
+    if (pool.length && roped(s.mode)) pool = [...pool, 'master'];
     if (pool.length) s.pickups.push({ x: b.x, y: b.y, kind: pool[Math.floor(rand(s) * pool.length)], t: 420 });
   }
 }
 
+/** Would a player standing at x be inside a block? */
+function blocked(s: State, x: number): boolean {
+  for (const r of s.rects) if (r.y + r.h > H - PH && r.y < H && x + PW / 2 > r.x && x - PW / 2 < r.x + r.w) return true;
+  return false;
+}
+
 function stepPlayers(s: State, inputs: number[], L: Level, ev: GameEvent[], canFire: boolean) {
   s.players.forEach((p, i) => {
-    if (p.down) return;
+    if (p.down || p.ride >= 0) return;
     const inp = inputs[i] | 0;
     const dx = (inp & IN_RIGHT ? 1 : 0) - (inp & IN_LEFT ? 1 : 0);
     if (dx) {
       const ox = p.x;
       p.face = dx;
       p.x += dx * PSPEED * (L.playerSpeed ?? 1) * (p.haste > 0 ? 1.8 : 1) * DT;
-      if (s.mode === 'tethered') {
-        // can't run further from a roped neighbour than the rope allows
+      if (roped(s.mode)) {
+        // can't run further from a roped neighbour than the rope allows, unless you hold the rope: then they come too
         for (const j of [i - 1, i + 1]) {
           const q = s.players[j];
           if (!q || q.down) continue;
+          if (p.master && Math.abs(p.x - q.x) > TETHER) {
+            const nx = Math.max(PW / 2, Math.min(W - PW / 2, p.x + (q.x > p.x ? TETHER : -TETHER)));
+            if (!blocked(s, nx)) q.x = nx;
+          }
           if (p.x > q.x + TETHER) p.x = Math.max(ox, q.x + TETHER);
           if (p.x < q.x - TETHER) p.x = Math.min(ox, q.x - TETHER);
         }
@@ -374,26 +424,43 @@ function stepPlayers(s: State, inputs: number[], L: Level, ev: GameEvent[], canF
     if (p.cd > 0) p.cd--;
     if (p.invuln > 0) p.invuln--;
     if (p.haste > 0) p.haste--;
-    if (!canFire || !p.armed || !(inp & IN_FIRE) || p.cd > 0) return;
+    // Two Heads: the trigger belongs to whoever rides in this body
+    const rider = s.players.findIndex((q) => q.ride === i);
+    const o = rider >= 0 ? rider : i;
+    if (!canFire || !p.armed || !((inputs[o] | 0) & IN_FIRE) || p.cd > 0) return;
     const w = p.weapon;
-    if (w === 'pulse') {
-      s.shots.push({ kind: 'bullet', x: p.x, y: H - PH, owner: i, sticky: false, t: 0 });
-      p.cd = 8;
-    } else if (w === 'beam') {
-      s.shots.push({ kind: 'beam', x: p.x, y: 0, owner: i, sticky: false, t: 10 });
-      p.cd = 60;
-    } else {
+    const out = (kind: Shot['kind']) => s.shots.some((sh) => sh.owner === o && sh.kind === kind);
+    const shot = (kind: Shot['kind'], x: number, y: number, more: Partial<Shot> = {}) => s.shots.push({ kind, x, y, owner: o, sticky: false, t: 0, v: 0, lim: 0, ...more });
+    p.cd = 8;
+    if (w === 'pulse') shot('bullet', p.x, H - PH);
+    else if (w === 'beam') { shot('beam', p.x, 0, { t: 10 }); p.cd = 60; }
+    else if (w === 'sword') { shot('slash', p.x, 0, { t: 8, v: p.face }); p.cd = 22; }
+    else if (w === 'side') { if (out('dartx')) { p.cd = 0; return; } shot('dartx', p.x + p.face * (PW / 2), H - PH * 0.55, { v: p.face * DART_V0 }); }
+    else if (w === 'rocket') { if (out('darty')) { p.cd = 0; return; } shot('darty', p.x, H - PH, { v: -DART_V0 }); }
+    else if (w === 'lance') { if (out('lance')) { p.cd = 0; return; } shot('lance', p.x, H - PH); }
+    else {
       let active = 0;
-      for (const sh of s.shots) if (sh.owner === i && sh.kind === 'wire') active++;
-      if (active >= (w === 'twin' ? 2 : 1)) return;
+      for (const sh of s.shots) if (sh.owner === o && sh.kind === 'wire') active++;
+      if (active >= (w === 'twin' ? 2 : 1)) { p.cd = 0; return; }
       // The tip starts at the top of the head (the line already reaches down to the floor),
       // so a ball right overhead is hit almost at once.
-      s.shots.push({ kind: 'wire', x: p.x, y: H - PH, owner: i, sticky: w === 'anchor', t: 0 });
-      p.cd = 8;
+      shot('wire', p.x, H - PH, { sticky: w === 'anchor', lim: w === 'stub' ? H - PH - STUB_REACH : 0 });
     }
-    p.st.shots++;
+    s.players[o].st.shots++;
     ev.push({ t: 'shoot', weapon: w });
   });
+  // riders go wherever their body goes
+  for (const p of s.players) {
+    if (p.ride < 0) continue;
+    const d = s.players[p.ride];
+    p.x = d.x; p.face = d.face; p.weapon = d.weapon; p.shield = d.shield; p.invuln = d.invuln; p.haste = d.haste;
+  }
+}
+
+function boxHit(b: Ball, x0: number, x1: number, y0: number, y1: number): boolean {
+  const cx = b.x < x0 ? x0 : b.x > x1 ? x1 : b.x, cy = b.y < y0 ? y0 : b.y > y1 ? y1 : b.y;
+  const dx = b.x - cx, dy = b.y - cy, r = RADII[b.size];
+  return dx * dx + dy * dy < r * r;
 }
 
 function stepShots(s: State, L: Level, ev: GameEvent[]) {
@@ -402,23 +469,44 @@ function stepShots(s: State, L: Level, ev: GameEvent[]) {
     const sh = s.shots[i];
     const stop = stopY(s, sh.x, spikes);
     let dead = false;
-    let y0 = sh.y, y1 = H, pad = 0, pierce = false;
+    // most shots are an upright line from y0 down to y1; the sword and the floor bolt are boxes
+    let y0 = sh.y, y1 = H, pad = 0, pierce = false, box: number[] | null = null;
     if (sh.kind === 'wire') {
+      const top = sh.lim > 0 ? Math.max(stop, sh.lim) : stop;
       if (sh.t > 0) {
         if (--sh.t === 0) dead = true;
-        if (sh.y < stop) sh.y = stop;
+        if (sh.y < top) sh.y = top;
       } else {
         sh.y -= WIRE_SPEED * DT;
-        if (sh.y <= stop) {
-          sh.y = stop;
+        if (sh.y <= top) {
+          sh.y = top;
           if (sh.sticky) sh.t = ANCHOR_TICKS; else dead = true;
         }
       }
-      y0 = sh.y;
+      y0 = sh.y; pad = 1; // a touch wider than it is drawn: a graze counts
     } else if (sh.kind === 'bullet') {
       sh.y -= BULLET_SPEED * DT;
       if (sh.y <= stop) dead = true;
       y0 = sh.y; y1 = sh.y + 16; pad = 2;
+    } else if (sh.kind === 'slash') {
+      if (--sh.t <= 0) dead = true;
+      sh.x = s.players[sh.owner].x;
+      box = [Math.min(sh.x, sh.x + sh.v * SWORD_REACH), Math.max(sh.x, sh.x + sh.v * SWORD_REACH), H - PH - 8, H];
+    } else if (sh.kind === 'dartx') {
+      sh.v += Math.sign(sh.v) * DART_ACC * DT;
+      sh.x += sh.v * DT;
+      if (sh.x < 0 || sh.x > W) dead = true;
+      for (const r of s.rects) if (sh.x > r.x && sh.x < r.x + r.w && sh.y > r.y && sh.y < r.y + r.h) dead = true;
+      box = [sh.x - 7, sh.x + 7, sh.y - 3, sh.y + 3];
+    } else if (sh.kind === 'darty') {
+      sh.v -= DART_ACC * DT;
+      sh.y += sh.v * DT;
+      if (sh.y <= stop) dead = true;
+      y0 = sh.y; y1 = sh.y + 14; pad = 3;
+    } else if (sh.kind === 'lance') {
+      sh.y -= LANCE_SPEED * DT;
+      if (sh.y <= stop) dead = true;
+      y0 = sh.y; y1 = Math.min(H, sh.y + LANCE_LEN); pad = 1;
     } else {
       if (--sh.t <= 0) dead = true;
       y0 = stop; pad = 3; pierce = true;
@@ -426,7 +514,7 @@ function stepShots(s: State, L: Level, ev: GameEvent[]) {
     if (!dead) {
       for (let j = s.balls.length - 1; j >= 0; j--) {
         const b = s.balls[j];
-        if (b.immune > 0 || !segHit(b, sh.x, y0, y1, pad)) continue;
+        if (b.immune > 0 || !(box ? boxHit(b, box[0], box[1], box[2], box[3]) : segHit(b, sh.x, y0, y1, pad))) continue;
         if (b.armor > 0) {
           // armoured: the hit punts it away from the floor instead of popping it
           b.armor--;
@@ -529,7 +617,14 @@ function applyPickup(s: State, p: Player, kind: PickupKind, L: Level) {
     case 'shield': p.shield = true; break;
     case 'slow': s.slowT = 300; break;
     case 'time': s.timeLeft = Math.min(L.time * 60, s.timeLeft + 600); break;
-    case 'life': if (s.mode === 'revive') s.team = Math.min(5, s.team + 1); else p.lives = Math.min(5, p.lives + 1); break;
+    case 'life':
+      if (s.mode === 'revive') s.team = Math.min(5, s.team + 1);
+      else {
+        p.lives = Math.min(5, p.lives + 1);
+        for (const q of s.players) if (q.ride === s.players.indexOf(p)) q.lives = p.lives; // a shared body shares its lives
+      }
+      break;
+    case 'master': for (const q of s.players) q.master = q === p; break;
     case 'haste': p.haste = 8 * 60; break;
     default: p.weapon = kind;
   }
@@ -563,7 +658,14 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
           else { s.level++; loadLevel(s, levels); }
         } else if (!s.players.some((p) => p.lives > 0)) s.phase = 'over';
         else if (s.level + 1 >= levels.length) s.phase = 'won';
-        else { s.level++; loadLevel(s, levels); }
+        else {
+          s.level++;
+          if (levels[s.level].floor !== levels[s.level - 1].floor) { // a checkpoint
+            for (const p of s.players) p.lives = Math.max(3, p.lives);
+            s.team = Math.max(3, s.team);
+          }
+          loadLevel(s, levels);
+        }
       }
       return;
     case 'over':
@@ -604,7 +706,7 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
     if (pk.y > H - PH - 10) {
       // If several players are touching it on the same tick, it goes to one of them at
       // random (even odds), not to whoever has the lowest player number.
-      const takers = s.players.filter((p) => !p.down && Math.abs(p.x - pk.x) < PW / 2 + 12);
+      const takers = s.players.filter((p) => !p.down && p.ride < 0 && Math.abs(p.x - pk.x) < PW / 2 + 12);
       if (takers.length) {
         const p = takers.length === 1 ? takers[0] : takers[Math.floor(rand(s) * takers.length)];
         applyPickup(s, p, pk.kind, L);
@@ -627,6 +729,9 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
     if (revive) { p.rt = REVIVE_TICKS; p.rp = 0; return; }
     p.lives--;
     s.lost++;
+    // Two Heads: both players in a body go down together
+    const me = s.players.indexOf(p);
+    for (const q of s.players) if (q.ride === me || p.ride === s.players.indexOf(q)) fell(q);
     if (p.vip) {
       // Protect the VIP: losing them costs everyone still standing a life and ends the attempt
       for (const q of s.players) if (!q.down) fell(q);
@@ -660,7 +765,7 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
   }
 
   for (const p of s.players) {
-    if (p.down || p.invuln > 0) continue;
+    if (p.down || p.invuln > 0 || p.ride >= 0) continue;
     const x0 = p.x - PW / 2 + 3, x1 = p.x + PW / 2 - 3, y0 = H - PH + 4;
     let gap = 1e9, hit = false;
     for (const b of s.balls) {

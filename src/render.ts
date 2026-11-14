@@ -1,6 +1,6 @@
 import { H, PH, PW, RADII, W, hasSpikes, levelAt, stopY } from './sim';
 import type { GameEvent, Level, PickupKind, State, Mode } from './sim';
-import { MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, VERSUS_WINS } from './sim';
+import { LANCE_LEN, MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, SWORD_REACH, TETHER, VERSUS_WINS, roped } from './sim';
 
 export const VIEW_W = W;
 export const VIEW_H = H + 60;
@@ -18,6 +18,12 @@ const PICK: Record<PickupKind, { c: string; label: string; name: string }> = {
   time: { c: '#ffd43b', label: '+', name: 'Time' },
   life: { c: '#ff8787', label: '♥', name: 'Life' },
   haste: { c: '#fcc419', label: '!', name: 'Haste' },
+  stub: { c: '#ced4da', label: 'h', name: 'Short harpoon' },
+  sword: { c: '#ffd8a8', label: '/', name: 'Sword' },
+  side: { c: '#63e6be', label: '>', name: 'Floor bolt' },
+  rocket: { c: '#ffa8a8', label: '^', name: 'Rocket' },
+  lance: { c: '#91a7ff', label: '|', name: 'Lance' },
+  master: { c: '#e0b56e', label: '@', name: 'Rope master' },
 };
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; c: string }
@@ -92,7 +98,7 @@ function background(ctx: CanvasRenderingContext2D) {
   ctx.stroke();
 }
 
-export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, total: number, dt: number, waiting = false, net?: { you: number; status: string }) {
+export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, where: string, dt: number, waiting = false, net?: { you: number; status: string }) {
   ctx.save();
   if (shake > 0) {
     shake -= dt;
@@ -182,6 +188,31 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
     } else if (sh.kind === 'bullet') {
       ctx.fillStyle = '#ffa94d';
       ctx.fillRect(sh.x - 2, sh.y, 4, 14);
+    } else if (sh.kind === 'slash') {
+      // a quick arc in front of the body
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = Math.min(1, sh.t / 5);
+      ctx.beginPath(); ctx.arc(sh.x, H - 16, SWORD_REACH - 2, sh.v > 0 ? -1.25 : Math.PI - 0.35, sh.v > 0 ? 0.35 : Math.PI + 1.25); ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else if (sh.kind === 'dartx') {
+      const d = Math.sign(sh.v), tail = Math.min(60, Math.abs(sh.v) * 0.05);
+      ctx.fillStyle = col; ctx.globalAlpha = 0.4;
+      ctx.fillRect(Math.min(sh.x, sh.x - d * tail), sh.y - 1.5, tail, 3);
+      ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.moveTo(sh.x + d * 8, sh.y); ctx.lineTo(sh.x - d * 5, sh.y - 5); ctx.lineTo(sh.x - d * 5, sh.y + 5); ctx.fill();
+    } else if (sh.kind === 'darty') {
+      const tail = Math.min(60, Math.abs(sh.v) * 0.05);
+      ctx.fillStyle = col; ctx.globalAlpha = 0.4;
+      ctx.fillRect(sh.x - 1.5, sh.y + 10, 3, tail);
+      ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.moveTo(sh.x, sh.y); ctx.lineTo(sh.x - 5, sh.y + 13); ctx.lineTo(sh.x + 5, sh.y + 13); ctx.fill();
+    } else if (sh.kind === 'lance') {
+      const y1 = Math.min(H, sh.y + LANCE_LEN);
+      ctx.fillStyle = col; ctx.globalAlpha = 0.35;
+      ctx.fillRect(sh.x - 3, sh.y, 6, y1 - sh.y);
+      ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
+      ctx.fillRect(sh.x - 1, sh.y, 2, y1 - sh.y);
     } else {
       const top = stopY(s, sh.x, spiked);
       ctx.fillStyle = `rgba(255,107,107,${0.25 + sh.t / 14})`;
@@ -222,14 +253,16 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   }
 
   // Tethered: a rope between neighbouring players, sagging when slack and taut when stretched
-  if (s.mode === 'tethered') {
+  if (roped(s.mode)) {
     for (let i = 0; i + 1 < s.players.length; i++) {
       const a = s.players[i], b = s.players[i + 1];
       if (a.down || b.down) continue;
-      const span = Math.abs(b.x - a.x), sag = Math.max(0, 1 - span / 240) * 40, y = H - PH / 2;
-      ctx.strokeStyle = span > 228 ? '#ff8787' : '#c9a66b';
+      const span = Math.abs(b.x - a.x), sag = Math.max(0, 1 - span / TETHER) * 40, y = H - PH / 2;
+      ctx.strokeStyle = span > TETHER - 12 ? '#ff8787' : '#c9a66b';
       ctx.lineWidth = 3;
       ctx.beginPath(); ctx.moveTo(a.x, y); ctx.quadraticCurveTo((a.x + b.x) / 2, y + sag, b.x, y); ctx.stroke();
+      // whoever holds the rope has it wound round a fist
+      for (const m of [a, b]) if (m.master) { ctx.fillStyle = '#e0b56e'; ctx.beginPath(); ctx.arc(m.x, y, 7, 0, Math.PI * 2); ctx.fill(); }
     }
   }
 
@@ -293,6 +326,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   // players
   s.players.forEach((pl, i) => {
     if (pl.lives <= 0 && pl.down) return; // out of the game
+    if (pl.ride >= 0) return; // rides in someone else's body
     if (pl.invuln > 0 && pl.invuln % 8 < 4) return;
     if (s.mode === 'revive' && pl.down && pl.rt <= 0) return;
     if (pl.haste > 0 && !pl.down) {
@@ -321,8 +355,18 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
     ctx.fillStyle = '#fff';
     ctx.fillRect(p.x - 5 + p.face * 2, y + 16, 3, 6);
     ctx.fillRect(p.x + 2 + p.face * 2, y + 16, 3, 6);
-    ctx.fillStyle = col;
-    ctx.fillRect(p.x - 1.5, y, 3, 8); // antenna
+    const rider = s.players.findIndex((q) => q.ride === i);
+    if (rider >= 0) {
+      // two heads: the gunner's colour on the lower half, and a second antenna
+      ctx.fillStyle = PLAYER_COL[rider % PLAYER_COL.length];
+      ctx.beginPath(); ctx.roundRect(x, y + 28, PW, PH - 28, [0, 0, 4, 4]); ctx.fill();
+      ctx.fillRect(p.x + 4.5, y, 3, 8);
+      ctx.fillStyle = col;
+      ctx.fillRect(p.x - 7.5, y, 3, 8);
+    } else {
+      ctx.fillStyle = col;
+      ctx.fillRect(p.x - 1.5, y, 3, 8); // antenna
+    }
     if (s.mode === 'onegun' || s.mode === 'vip') drawRole(ctx, pl.vip ? 'vip' : pl.armed && s.mode === 'onegun' ? 'gun' : '', p.x, y, s.tick);
     if (net && net.you === i && s.phase === 'ready') {
       ctx.beginPath(); ctx.moveTo(p.x - 8, y - 22); ctx.lineTo(p.x + 8, y - 22); ctx.lineTo(p.x, y - 10); ctx.fill();
@@ -360,7 +404,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
   ctx.fillRect(20, H + 12, W - 40, 10);
   ctx.fillStyle = frac < 0.25 ? '#ff6b6b' : '#ffd43b';
   ctx.fillRect(20, H + 12, (W - 40) * frac, 10);
-  text(ctx, s.mode === 'versus' ? `${L.name}  -  first to ${VERSUS_WINS}` : `${s.level + 1}/${total}  ${L.name}`, 20, H + 42, 16, '#cfd4ff', 'left');
+  text(ctx, s.mode === 'versus' ? `${L.name}  -  first to ${VERSUS_WINS}` : `${where}  ${L.name}`, 20, H + 42, 16, '#cfd4ff', 'left');
   if (s.mode === 'revive') text(ctx, `team ${'♥'.repeat(Math.max(0, s.team))}`, W - 110, H + 42, 16, '#ff8787', 'right');
   text(ctx, String(s.score).padStart(6, '0'), W - 20, H + 42, 18, '#fff', 'right');
   s.players.forEach((p, i) => {
@@ -389,11 +433,12 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, tota
     if (s.mode !== 'classic' && s.mode !== 'versus') {
       const me = net ? s.players[net.you] : undefined;
       const roles = s.mode === 'onegun' || s.mode === 'vip';
-      const role = me && roles ? (me.vip ? 'You are the VIP. Stay alive!' : me.armed ? (s.mode === 'onegun' ? 'You have the gun!' : 'Protect the VIP!') : 'No gun. Dodge!') : '';
+      const duo = s.mode === 'duo' && me ? (me.ride >= 0 ? 'You shoot' : s.players.some((q) => q.ride === net!.you) ? 'You move' : '') : '';
+      const role = duo ? duo : me && roles ? (me.vip ? 'You are the VIP. Stay alive!' : me.armed ? (s.mode === 'onegun' ? 'You have the gun!' : 'Protect the VIP!') : 'No gun. Dodge!') : '';
       text(ctx, role || MODES.find((x) => x.id === s.mode)!.hint, W / 2, 302, 16, '#ffd43b', 'center', role ? 700 : 400);
     }
+    if (s.mode !== 'versus' && L.floor && / 1\//.test(where)) text(ctx, `FLOOR ${L.floor}`, W / 2, 140, 18, '#ffd43b');
     text(ctx, L.name, W / 2, 190, 40);
-    if (L.hint) text(ctx, L.hint, W / 2, 235, 16, '#cfd4ff', 'center', 400);
     if (touch) text(ctx, 'Left thumb: slide to move      Right thumb: hold to fire', W / 2, 320, 15, '#8a90c7', 'center', 400);
   } else if (s.phase === 'clear') text(ctx, 'CLEAR!', W / 2, 200, 48, '#8ce99a');
   else if (s.phase === 'over') overlay(ctx, 'GAME OVER', '#ff6b6b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
@@ -474,6 +519,31 @@ function drawToken(ctx: CanvasRenderingContext2D, kind: PickupKind, x: number, y
     case 'haste': // lightning bolt
       ctx.beginPath(); ctx.moveTo(2, -10); ctx.lineTo(-6, 1); ctx.lineTo(-1, 1); ctx.lineTo(-3, 10); ctx.lineTo(6, -2); ctx.lineTo(1, -2); ctx.closePath(); ctx.fill();
       break;
+    case 'stub': // a short arrow under a bar
+      ctx.beginPath(); ctx.moveTo(-6, -8); ctx.lineTo(6, -8); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, 8); ctx.lineTo(0, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-3.5, 1); ctx.lineTo(0, -5); ctx.lineTo(3.5, 1); ctx.closePath(); ctx.fill();
+      break;
+    case 'sword':
+      ctx.beginPath(); ctx.moveTo(-6, 7); ctx.lineTo(6, -8); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-7, 1); ctx.lineTo(-1, 6); ctx.stroke();
+      break;
+    case 'side':
+      ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(3, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(2, -4); ctx.lineTo(9, 0); ctx.lineTo(2, 4); ctx.closePath(); ctx.fill();
+      break;
+    case 'rocket':
+      ctx.beginPath(); ctx.moveTo(0, -9); ctx.lineTo(-4.5, 2); ctx.lineTo(4.5, 2); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-3, 5); ctx.lineTo(0, 9); ctx.lineTo(3, 5); ctx.stroke();
+      break;
+    case 'lance':
+      ctx.fillRect(-1, -9, 2, 18);
+      ctx.globalAlpha = 0.35; ctx.fillRect(-3, -9, 6, 18); ctx.globalAlpha = 1;
+      break;
+    case 'master': // a loop of rope
+      ctx.beginPath(); ctx.arc(0, -2, 5.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-3, 3); ctx.lineTo(-6, 9); ctx.moveTo(3, 3); ctx.lineTo(6, 9); ctx.stroke();
+      break;
     case 'life': // heart
       ctx.beginPath(); ctx.moveTo(0, 8);
       ctx.bezierCurveTo(-12, 0, -7, -9, 0, -3);
@@ -512,24 +582,85 @@ function backdrop(ctx: CanvasRenderingContext2D, t: number) {
 }
 
 /** Vertical positions of the menu's rows and play button (view coordinates). */
-export const MENU_Y = { rows: 226, gap: 40, go: 420 };
+export const MENU_Y = { rows: 250, gap: 44, go: 420 };
 
 export interface MenuView {
   /** The chosen mode needs more players than the chosen way of playing gives. */
   blocked: boolean;
-  row: number; t: number; setName: string; levelName: string; gameMode: { id: Mode; name: string; hint: string }; playName: string }
+  row: number; t: number; gameMode: { id: Mode; name: string; hint: string }; playName: string }
 
 export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   backdrop(ctx, m.t);
   text(ctx, 'SPLITSTORM', W / 2, 110, 72, '#fff');
   text(ctx, 'pop them all. mind the little ones.', W / 2, 162, 16, '#cfd4ff', 'center', 400);
-  const rows = [`Levels:   <  ${m.setName}  >`, `Start at: <  ${m.levelName}  >`, `Mode:     <  ${m.gameMode.name}  >`, `Play:     <  ${m.playName}  >`];
+  const rows = [`Mode:     <  ${m.gameMode.name}  >`, `Play:     <  ${m.playName}  >`];
   rows.forEach((r, i) => text(ctx, r, W / 2, MENU_Y.rows + i * MENU_Y.gap, 22, m.row === i ? '#ffd43b' : '#8a90c7'));
   const hint = m.gameMode.id === 'classic' ? '' : m.gameMode.hint;
-  if (hint) text(ctx, hint, W / 2, MENU_Y.rows + 3.75 * MENU_Y.gap, 13, '#8a90c7', 'center', 400);
-  if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players: pick 2 players or play online`, W / 2, MENU_Y.go, 18, '#ff8787');
+  if (hint) text(ctx, hint, W / 2, MENU_Y.rows + 2 * MENU_Y.gap, 13, '#8a90c7', 'center', 400);
+  if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players`, W / 2, MENU_Y.go, 18, '#ff8787');
   else text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, MENU_Y.go, touch ? 26 : 22, '#8ce99a');
   text(ctx, touch ? 'Tap a row to change it' : 'P1: arrows + Space      P2: A / D + W      P: pause   Esc: menu', W / 2, H + 30, 14, '#8a90c7', 'center', 400);
+}
+
+/** Layout of the tower screen (view coordinates), shared with the touch handling. */
+export const TOWER_UI = { top: 76, slabH: 40, gap: 5, cx: 236, w: 400, listX: 520, listY: 176, listGap: 31, goY: 470 };
+
+export interface TowerView {
+  t: number;
+  /** Top floor last. `levels` holds names, or '' for a level not seen yet. */
+  floors: { name: string; locked: boolean; levels: string[] }[];
+  floor: number; // selected floor
+  level: number; // selected level on it; 0 = climb from the checkpoint, anything else is practice
+}
+
+export function drawTower(ctx: CanvasRenderingContext2D, v: TowerView) {
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const U = TOWER_UI, n = v.floors.length;
+  text(ctx, 'THE TOWER', U.cx - U.w / 2, 50, 30, '#fff', 'left');
+  v.floors.forEach((f, i) => {
+    const w = U.w * (1 - i * 0.04), x = U.cx - w / 2, y = U.top + (n - 1 - i) * (U.slabH + U.gap);
+    const on = i === v.floor;
+    ctx.fillStyle = f.locked ? '#0b0c18' : '#1b1e3d';
+    ctx.fillRect(x, y, w, U.slabH);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = on ? '#ffa94d' : f.locked ? '#1e2140' : '#7d86d6';
+    ctx.strokeRect(x, y, w, U.slabH);
+    const col = f.locked ? '#5b6090' : '#e8eaf6';
+    text(ctx, String(i + 1), x + 16, y + U.slabH / 2 + 1, 20, col, 'left');
+    text(ctx, f.locked ? '? ? ?' : f.name, x + 48, y + U.slabH / 2 + 1, 15, col, 'left', 600);
+    if (f.locked) {
+      // padlock
+      const lx = x + w - 24, ly = y + U.slabH / 2;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.6;
+      ctx.strokeRect(lx - 5, ly - 1, 10, 7);
+      ctx.beginPath(); ctx.arc(lx, ly - 1, 3, Math.PI, 0); ctx.stroke();
+    } else {
+      f.levels.forEach((name, k) => {
+        const px = x + w - 16 - (f.levels.length - 1 - k) * 11;
+        ctx.beginPath(); ctx.arc(px, y + U.slabH / 2, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd43b'; ctx.strokeStyle = '#7d86d6'; ctx.lineWidth = 1;
+        if (name) ctx.fill(); else ctx.stroke();
+      });
+    }
+  });
+  ctx.fillStyle = '#2b2f55';
+  ctx.fillRect(U.cx - U.w / 2 - 12, U.top + n * (U.slabH + U.gap), U.w + 24, 4);
+
+  const f = v.floors[v.floor];
+  text(ctx, `FLOOR ${v.floor + 1}`, U.listX, 100, 13, '#ffa94d', 'left');
+  text(ctx, f.name, U.listX, 132, 30, '#fff', 'left');
+  f.levels.forEach((name, k) => {
+    const y = U.listY + k * U.listGap, on = k === v.level;
+    text(ctx, String(k + 1), U.listX, y, 15, '#8a90c7', 'left', 400);
+    text(ctx, name || '? ? ?', U.listX + 28, y, 17, on ? '#ffd43b' : name ? '#e8eaf6' : '#5b6090', 'left', on ? 700 : 400);
+  });
+  const go = v.level ? 'practice' : 'climb';
+  text(ctx, touch ? `TAP HERE TO ${go.toUpperCase()}` : `Enter: ${go}`, U.listX, U.goY, 22, '#8ce99a', 'left');
+  if (touch) closeButton(ctx);
+  else text(ctx, 'Up/Down: floor   Left/Right: level   Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
 }
 
 export interface LobbyView {
@@ -538,14 +669,16 @@ export interface LobbyView {
   room: string;
   modeName: string;
   modeHint: string;
-  link: string; copied: boolean; t: number; setName: string; levelName: string;
+  link: string; copied: boolean; t: number;
+  /** The floor the host has picked, and the floor each player in the room has reached. */
+  floor: number; reached: number[];
   /** Host: which settings row is selected. */
   row: number;
   starting: boolean;
 }
 
 /** Vertical positions of the lobby's tappable lines (view coordinates). */
-export const LOBBY_Y = { link: 222, set: 314, level: 344, mode: 374, start: 446 };
+export const LOBBY_Y = { link: 222, floor: 322, mode: 366, start: 446 };
 
 export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   backdrop(ctx, v.t);
@@ -555,9 +688,9 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   const settings = (editable: boolean) => {
     const row = (label: string, value: string, y: number, on: boolean) =>
       text(ctx, editable ? `${label} <  ${value}  >` : `${label} ${value}`, W / 2, y, 20, on ? '#ffd43b' : '#8a90c7');
-    row('Levels:  ', v.setName, LOBBY_Y.set, editable && v.row === 0);
-    row('Start at:', v.levelName, LOBBY_Y.level, editable && v.row === 1);
-    row('Mode:    ', v.modeName, LOBBY_Y.mode, editable && v.row === 2);
+    row('Floor:', String(v.floor + 1), LOBBY_Y.floor, editable && v.row === 0);
+    if (v.reached.length > 1) text(ctx, v.reached.map((r) => r + 1).join('  ·  '), W / 2, LOBBY_Y.floor + 20, 12, '#8a90c7', 'center', 400);
+    row('Mode: ', v.modeName, LOBBY_Y.mode, editable && v.row === 1);
     if (v.modeHint && v.modeName !== 'Classic') text(ctx, v.modeHint, W / 2, LOBBY_Y.mode + 26, 13, '#8a90c7', 'center', 400);
   };
   text(ctx, host ? 'HOST A GAME' : 'JOIN A GAME', W / 2, 62, 36);
@@ -575,7 +708,7 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
       sub(v.copied ? 'Invite link copied.' : touch ? 'Tap here to share the invite link' : 'C: copy invite link', LOBBY_Y.link + 10, v.copied ? '#8ce99a' : '#cfd4ff');
       if (v.status === 'connected') {
         text(ctx, v.starting ? `Starting${dots}` : v.room, W / 2, 278, 20, '#8ce99a');
-        foot = 'Up/Down, Left/Right: change level   Enter: start   Esc: close room';
+        foot = 'Arrows: change   Enter: start   Esc: close room';
         action = 'TAP HERE TO START';
       } else sub(`Waiting for friends to join${dots}  (up to 4 players)`, 278);
       settings(true);
@@ -589,7 +722,6 @@ export function drawLobby(ctx: CanvasRenderingContext2D, v: LobbyView) {
   else {
     text(ctx, v.room || 'Connected', W / 2, 190, 24, '#8ce99a');
     sub(`Waiting for the host to start${dots}`, 235);
-    sub('The host has picked:', 282, '#8a90c7');
     settings(false);
   }
   if (touch) {
@@ -674,26 +806,23 @@ export function drawResults(ctx: CanvasRenderingContext2D, v: ResultsView) {
       text(ctx, c.show(vals[i]), x0 + dx * (k + 0.5), y, 18, top1 ? '#ffd43b' : '#fff', 'center', top1 ? 700 : 400);
     });
   }
-  // awards
-  const P = s.players, name = (i: number) => (n === 1 ? 'You' : COLOR_NAMES[i][0].toUpperCase() + COLOR_NAMES[i].slice(1));
-  const argBest = (f: (i: number) => number, low = false) => {
-    let b = -1;
-    P.forEach((_, i) => { if (b < 0 || (low ? f(i) < f(b) : f(i) > f(b))) b = i; });
-    return b;
-  };
-  const awards: [string, string, number][] = [];
-  const reck = argBest((i) => P[i].st.danger);
-  if (P[reck].st.danger > 30) awards.push(['Most reckless', `${(P[reck].st.danger / 60).toFixed(1)} s within a hair of a ball`, reck]);
-  const shave = argBest((i) => P[i].st.shave, true);
-  if (P[shave].st.shave < 16) awards.push(['Closest shave', `${P[shave].st.shave.toFixed(1)} px from disaster`, shave]);
-  const acc = (i: number) => (P[i].st.shots >= 10 ? P[i].st.pops / P[i].st.shots : 0);
-  const sharp = argBest(acc);
-  if (acc(sharp) > 0) awards.push(['Sharpshooter', `${Math.round(acc(sharp) * 100)} pops per 100 shots`, sharp]);
-  awards.slice(0, 3).forEach(([t, d, i], k) => {
-    const x = W / 2 + (k - (Math.min(3, awards.length) - 1) / 2) * 300;
-    text(ctx, t.toUpperCase(), x, 392, 12, '#8a90c7');
-    text(ctx, name(i), x, 414, 18, PLAYER_COL[i % PLAYER_COL.length]);
-    text(ctx, d, x, 436, 12, '#cfd4ff', 'center', 400);
+  // awards: every player's figure, best first
+  const P = s.players, short = (i: number) => (n === 1 ? 'You' : COLOR_NAMES[i][0].toUpperCase() + COLOR_NAMES[i].slice(1));
+  const acc = (i: number) => (P[i].st.shots >= 10 ? P[i].st.pops / P[i].st.shots : -1);
+  const awards: { h: string; get: (i: number) => number; show: (x: number) => string; low?: boolean }[] = [
+    { h: 'Most reckless', get: (i) => P[i].st.danger, show: (x) => `${(x / 60).toFixed(1)} s` },
+    { h: 'Closest shave', get: (i) => P[i].st.shave, show: (x) => (x < 16 ? `${x.toFixed(1)} px` : '-'), low: true },
+    { h: 'Sharpshooter', get: (i) => acc(i), show: (x) => (x < 0 ? '-' : `${Math.round(x * 100)}%`) },
+  ];
+  awards.forEach((a, k) => {
+    const x = W / 2 + (k - 1) * 280;
+    text(ctx, a.h.toUpperCase(), x, 372, 12, '#8a90c7');
+    const order = P.map((_, i) => i).sort((i, j) => (a.low ? a.get(i) - a.get(j) : a.get(j) - a.get(i)) || i - j);
+    order.forEach((i, r) => {
+      const y = 394 + r * 20;
+      text(ctx, short(i), x - 8, y, r === 0 ? 16 : 14, PLAYER_COL[i % PLAYER_COL.length], 'right', r === 0 ? 700 : 400);
+      text(ctx, a.show(a.get(i)), x + 8, y, r === 0 ? 16 : 14, r === 0 ? '#fff' : '#cfd4ff', 'left', r === 0 ? 700 : 400);
+    });
   });
   text(ctx, touch ? 'TAP TO CONTINUE' : `Enter: back to the ${v.online ? 'lobby' : 'menu'}`, W / 2, H + 20, touch ? 22 : 16, '#8ce99a');
 }

@@ -10,7 +10,7 @@ Live: https://jonsploder.github.io/bubble-trouble-online/
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173  (?play=hard-8 jumps straight to a level)
+npm run dev        # http://localhost:5173  (?play=tower-17 jumps straight to a level)
 npm run build      # static site in dist/; pushing to main deploys it via GitHub Actions
 ```
 
@@ -24,28 +24,52 @@ Picked on the menu, or by the host in an online lobby.
 | Mode | Rules |
 |---|---|
 | Classic | Everyone shoots. |
-| One Gun | Only one player, picked at random, can shoot; they carry a glowing gold harpoon. When they're hit, the gun passes to a random player who is still standing. |
-| Protect the VIP | One random player (wearing a crown) can't shoot. If the VIP is hit, everyone still standing loses a life and the attempt is over. |
+| One Gun | Roped together (see Tethered). Only one player, picked at random, can shoot; they carry a glowing gold harpoon. When they're hit, the gun passes to a random player who is still standing. |
+| Protect the VIP | Roped together. One random player (wearing a crown) can't shoot. If the VIP is hit, everyone still standing loses a life and the attempt is over. |
 | Versus | Each player gets their own lane (the level set is ignored; rounds are generated). When you pop a ball, its first piece stays and the rest drop into random rivals' lanes. Clear your lane first, or be the last one standing, to win the round. First to 3 rounds wins. |
-| Tethered | Players are roped to their neighbours and can't get more than 240 px apart. |
+| Tethered | Players are roped to their neighbours and can't get more than 170 px apart. In every roped mode a **rope master** pickup can drop: its holder drags neighbours along instead of being held back. |
+| Two Heads | Players pair up in one body: one moves, the other shoots, and they swap every level. An odd player out plays alone. |
 | Revive | The team shares 3 lives. A hit player waits in a small circle for 15 seconds; a teammate standing in it for 1.5 s brings them back. If time runs out, the whole team goes down and loses a life. Every player must be up for a level to count as cleared. |
 
 Except in Revive, each player has their own 3 lives. A hit sits you out until the level is cleared or
 restarts; the level restarts once everyone is down. Single-player games are always Classic.
 
-## Level sets
+## The Tower
 
-- **Campaign** (16) and **Hard mode** (13): the main game, then gravity flips, armoured balls, wind, spin and moving blocks.
-- **Twists** (22): a curriculum. Each idea is introduced alone, developed once, then mixed two at a time, then all together:
-  1. *Portals*: Wormhole (floor portal to sky exit), Return Trip (two-way), Round Robin (numbered one-way loop).
-  2. *Timing*: Metronome (balls that bounce on the spot: step under, fire, step out).
-  3. *Splits*: Triplets, Three's a Crowd, Quadruplets, Mixed Bag. The number on a ball is how many pieces it splits into; the middle piece of a three-way split bounces on the spot, which is why timing comes first.
-  4. *Speed*: Too Much Coffee (lightning **haste** drops: 8 s of running 1.8x faster), Express (fast all level).
-  5. *Cursed drops*: Butterfingers (beam, pulse gun, haste: leave them on the floor).
-  6. *Mixes*: Flip Side (gravity flips + portals), Espresso Shot (speed + portals), Hall of Mirrors (portal loop + gate + splits), Split Ends (splits + portals), Do Not Touch (splits + cursed drops), Jitterbug (speed + splits), Numbers Game (mixed splits + descending roof), Through Traffic (timing + portals), Drum Line (ten quick on-the-spot bouncers under caps).
-  7. *Finale*: Revolving Door, Chaos Theory.
+All 56 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each floor opens on a new idea:
 
-The pause screen lists every mode's rules. The results screen hands out awards: **Most reckless** (time spent within 16 px of a ball), **Closest shave** (smallest gap to a ball that didn't hit you) and **Sharpshooter** (pops per shot).
+| Floor | Name | Levels |
+|---|---|---|
+| 1 | Ground Floor | 8: the basics |
+| 2 | The Workshop | 8: gates, drops, a descending roof |
+| 3 | Portal Gallery | 6: portals, balls that bounce on the spot |
+| 4 | Split Level | 7: balls that split into 3 and 4 (the number on a ball is how many pieces) |
+| 5 | The Armoury | 5: odd weapons (below) |
+| 6 | Heavy Weather | 7: armour, wind, gravity flips |
+| 7 | Machine Room | 6: spin, moving blocks, crushers |
+| 8 | Overclocked | 6: speed and cursed drops |
+| 9 | Summit | 3: everything |
+
+- A run starts at the first level of any unlocked floor with 3 lives each. Game over means starting that floor again.
+- Reaching a new floor unlocks it as a starting point and tops everyone's lives back up to 3.
+- Progress is one number in the browser's local storage (`splitstorm.tower.v1`): the highest level reached. Solo and online play share it.
+- The map shows names only for floors and levels already seen. A seen level can be picked directly for practice; practice runs save nothing.
+- Online, the host can start no higher than the lowest floor anyone in the room has reached. Everyone playing saves what the run reaches.
+- The game deliberately explains little. Level hints show only on the pause screen.
+
+Weapons beyond the harpoon, twin harpoon, sticky vine, pulse gun and beam:
+
+| Weapon | What it does |
+|---|---|
+| Short harpoon | Reaches only 48 px above your head. |
+| Sword | A swipe 46 px in front of you, at body height. |
+| Floor bolt | One bolt at a time along the floor, the way you face, picking up speed. |
+| Rocket | The same, straight up. Drops in ordinary levels too. |
+| Lance | One thin 96 px bar of light at a time, travelling up. Drops in ordinary levels too. |
+
+On the dev server, `?reach=20` opens the map as if level 20 had been reached, and `?play=tower-17` jumps into a level. Neither saves.
+
+The pause screen lists every mode's rules. The results screen ranks every player on three awards: **Most reckless** (time spent within 16 px of a ball), **Closest shave** (smallest gap to a ball that didn't hit you) and **Sharpshooter** (pops per shot).
 
 ## How online play works
 
@@ -128,7 +152,7 @@ Ideas not yet tried:
 ## Level balance
 
 ```bash
-npm run balance                # every set; add a set id (twists) and/or attempts per level (32)
+npm run balance -- tower       # add attempts per level (32); without a set id it also runs the three original sets
 ```
 
 The smoke-test bot has perfect reflexes, so it only proves a level is *possible*. `npm run balance` plays every level with a deliberately human-like bot (it reacts about 130 ms late, misjudges ball positions by a few pixels, presses and releases keys a little late, and avoids cursed drops) and reports, per level: pops needed, share of attempts cleared on one life, typical clear time, when it tends to die, and how often portals get used.

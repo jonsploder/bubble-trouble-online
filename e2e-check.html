@@ -39,10 +39,12 @@
       await until('guests linked to each other', () => F.slice(1).every((g) => dbg(g).net.room.seats().length === N - 1), 30000);
       steps.push('guests linked directly to each other');
     }
-    await press(A, 'ArrowRight'); // host switches to Hard mode in the lobby
-    await until('guests see host setting', () => F.slice(1).every((g) => dbg(g).net.hostSet === 1));
+    await press(A, 'ArrowDown'); // host switches to the Mode row and changes mode
+    await press(A, 'ArrowRight');
+    await until('guests see host setting', () => F.slice(1).every((g) => dbg(g).net.hostMode === 1));
     steps.push('lobby settings synced');
     await press(A, 'ArrowLeft');
+    await press(A, 'ArrowUp');
 
     const playOnce = async (label) => {
       await press(A, 'Enter');
@@ -70,7 +72,7 @@
     await until('all back in lobby', () => F.every((f) => dbg(f).screen === 'lobby'), 10000);
     steps.push('guest quit -> everyone saw results -> lobby');
     // switch to One Gun for the second game
-    await press(A, 'ArrowDown'); await press(A, 'ArrowDown'); await press(A, 'ArrowRight');
+    await press(A, 'ArrowDown'); await press(A, 'ArrowRight');
     await until('guests see One Gun', () => F.slice(1).every((g) => dbg(g).net.hostMode === 1));
 
     S = await playOnce('game 2');

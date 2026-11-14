@@ -1,15 +1,15 @@
 import { playEvents, unlockAudio } from './audio';
-import { SETS } from './levels';
+import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
-import { CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, drawGame, drawLobby, drawMenu, drawResults, drawRotate, fxEvents, setTouch } from './render';
+import { CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawTower, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
 import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 12;
+const VERSION = 13;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
@@ -31,18 +31,37 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
 
 // ---------------------------------------------------------------- state
-type Screen = 'menu' | 'lobby' | 'game' | 'results';
+type Screen = 'menu' | 'tower' | 'lobby' | 'game' | 'results';
 let screen: Screen = 'menu';
-let levels: Level[] = SETS[0].levels;
+let levels: Level[] = TOWER;
 let game: State | null = null; // local play
 let session: RollbackSession | null = null; // online play
 let sessionT0 = 0;
-let gameSet = 0; // level set of the local game
+let gameSet = TOWER_SET; // level set of the local game
+let practice = false; // the local game started mid-floor: it saves no progress
 /** End-of-game stats being shown, and where to go after. */
 let results: { s: State; set: number; you: number; online: boolean } | null = null;
 let pausePulse = false; // send IN_PAUSE on the next tick
 const keys = new Set<string>();
-const menu = { set: 0, level: 0, gmode: 0, mode: 0, row: 0, t: 0 }; // gmode: game mode (MODES), mode: how to play (PLAY_MODES)
+const menu = { floor: 0, level: 0, gmode: 0, mode: 0, row: 0, t: 0 }; // floor/level: the tower pick; gmode: game mode (MODES), mode: how to play (PLAY_MODES)
+
+// ---------------------------------------------------------------- progress
+// One number, kept in this browser: the highest tower level ever reached. A floor is unlocked
+// once its first level has been reached; a level's name shows once the level has been seen.
+const SAVE_KEY = 'splitstorm.tower.v1';
+let reach = 0;
+try { reach = Math.max(0, Math.min(TOWER.length - 1, Math.floor(+(localStorage.getItem(SAVE_KEY) ?? 0)) || 0)); } catch { /* private window: progress lasts for this visit */ }
+const floorOf = (level: number) => (TOWER[level]?.floor ?? 1) - 1;
+function reached(s: State) {
+  if (s.mode === 'versus' || s.level <= reach || s.level >= TOWER.length) return;
+  reach = s.level;
+  try { localStorage.setItem(SAVE_KEY, String(reach)); } catch { /* ignore */ }
+}
+/** HUD label: floor, and how far up it. */
+function where(s: State): string {
+  const f = floorOf(s.level);
+  return levels === TOWER ? `${f + 1} · ${s.level - FLOOR_START[f] + 1}/${FLOORS[f].levels.length}` : `${s.level + 1}/${levels.length}`;
+}
 
 /** `seats` lists who is playing, in player order; `wait` is how long the recipient should hold off before starting. */
 type StartMsg = { t: 'start'; v: number; gid: number; set: number; level: number; gm: Mode; seed: number; seats: number[]; wait: number };
@@ -62,8 +81,8 @@ const net = {
   roster: [] as RosterEntry[], // the guests in the room
   rtt: {} as Record<number, number>, // host: round trip to each guest seat; guest: to the host (seat 0)
   row: 0, // host's selected settings row in the lobby
-  hostSet: 0, // guest's view of what the host has picked
-  hostLevel: 0,
+  hostFloor: 0, // guest's view of what the host has picked
+  floors: {} as Record<number, number>, // floor each seat has reached; the party can start no higher than the lowest
   hostMode: 0,
   gid: 0,
   lastGid: -1,
@@ -88,6 +107,7 @@ function closeRoom() {
   net.start = null;
   net.roster = [];
   net.rtt = {};
+  net.floors = {};
 }
 
 function fail(reason: string) {
@@ -113,7 +133,7 @@ function onLink(seat: number, up: boolean) {
   const room = net.room!;
   if (net.role === 'host') {
     net.roster = room.roster();
-    if (!up) delete net.rtt[seat];
+    if (!up) { delete net.rtt[seat]; delete net.floors[seat]; }
     if (net.code) net.status = room.seats().length ? 'connected' : 'waiting';
     // someone in the current game dropped out: it can't continue without their inputs
     if (!up && session && net.seats.includes(seat)) endSession();
@@ -161,6 +181,15 @@ function beginSession(m: StartMsg) {
   keys.clear();
 }
 
+/** Host: the highest floor everyone in the room has reached. A guest we haven't heard from yet counts as floor 1. */
+function partyFloor(): number {
+  return Math.min(floorOf(reach), ...(net.room?.seats() ?? []).map((g) => net.floors[g] ?? 0));
+}
+/** The floor each player has reached, in seat order. */
+function partyFloors(): number[] {
+  return [floorOf(reach), ...(net.room?.seats() ?? []).sort((a, b) => a - b).map((g) => net.floors[g] ?? 0)];
+}
+
 // Start handshake, so everyone begins at (nearly) the same moment. The host picks a moment
 // a little in the future and tells each guest how long to wait, allowing for how long the
 // message takes to reach them. The message is repeated until the guest answers 'go'.
@@ -170,7 +199,7 @@ function hostStart() {
   const guests = room.seats().sort((a, b) => a - b);
   if (!guests.length) return;
   const lead = Math.max(...guests.map((g) => (net.rtt[g] ?? 150) / 2)) + 60;
-  const msg: StartMsg = { t: 'start', v: VERSION, gid: ++net.gid, set: menu.set, level: menu.level, gm: MODES[menu.gmode].id, seed: (Date.now() & 0x7fffffff) | 1, seats: [0, ...guests], wait: 0 };
+  const msg: StartMsg = { t: 'start', v: VERSION, gid: ++net.gid, set: TOWER_SET, level: FLOOR_START[Math.min(menu.floor, partyFloor())], gm: MODES[menu.gmode].id, seed: (Date.now() & 0x7fffffff) | 1, seats: [0, ...guests], wait: 0 };
   net.start = { msg, at: performance.now() + lead, waiting: new Set(guests) };
   room.setOpen(false);
   offerStart();
@@ -189,6 +218,7 @@ function offerStart() {
 function endSession() {
   if (session && net.meta) {
     uploadLog(net.meta, net.me, session.finish());
+    reached(session.confirmed);
     uploadLevels(session.confirmed, net.meta.set, true);
     showResults(session.confirmed, net.meta.set, net.me, true);
   } else screen = 'lobby';
@@ -206,7 +236,10 @@ function showResults(s: State, set: number, you: number, online: boolean) {
 }
 
 function closeResults() {
-  screen = results?.online && net.room ? 'lobby' : 'menu';
+  const tower = results && results.set === TOWER_SET && results.s.mode !== 'versus';
+  screen = results?.online && net.room ? 'lobby' : tower ? 'tower' : 'menu';
+  menu.floor = floorOf(reach);
+  menu.level = 0;
   results = null;
 }
 
@@ -242,8 +275,8 @@ function onMessage(seat: number, m: Msg) {
     case 'ping': // host -> guest, while the host is in the lobby
       if (net.role !== 'guest' || seat !== 0) break;
       room.send(0, { t: 'pong', ts: m.ts });
-      net.hostSet = m.set as number;
-      net.hostLevel = m.level as number;
+      net.hostFloor = (m.floor as number) ?? 0;
+      net.floors = Object.fromEntries(((m.floors as number[]) ?? []).map((f, i) => [i, f]));
       net.hostMode = (m.gm as number) ?? 0;
       net.seat = m.you as number;
       net.roster = m.players as RosterEntry[];
@@ -254,6 +287,8 @@ function onMessage(seat: number, m: Msg) {
     case 'gping': // guest -> host, while the guest is in the lobby
       if (net.role !== 'host') break;
       room.send(seat, { t: 'pong', ts: m.ts });
+      net.floors[seat] = Math.max(0, Math.min(FLOORS.length - 1, (m.floor as number) | 0));
+      menu.floor = Math.min(menu.floor, partyFloor());
       // A player in our current game is sitting in the lobby: they quit, so the game ends.
       if (session && m.left === net.lastGid && net.seats.includes(seat)) endSession();
       break;
@@ -292,9 +327,9 @@ setInterval(() => {
   if ((screen !== 'lobby' && screen !== 'results') || beat % 4 || net.start) return;
   if (net.role === 'host') {
     const players = room.roster();
-    for (const g of room.seats()) room.send(g, { t: 'ping', ts: performance.now(), set: menu.set, level: menu.level, gm: menu.gmode, you: g, players, gid: net.gid });
+    for (const g of room.seats()) room.send(g, { t: 'ping', ts: performance.now(), floor: Math.min(menu.floor, partyFloor()), floors: partyFloors(), gm: menu.gmode, you: g, players, gid: net.gid });
   } else {
-    room.send(0, { t: 'gping', ts: performance.now(), left: net.lastGid });
+    room.send(0, { t: 'gping', ts: performance.now(), left: net.lastGid, floor: floorOf(reach) });
   }
 }, 100);
 
@@ -305,6 +340,7 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   keys.add(e.code);
   if (screen === 'menu') menuKey(e.code);
+  else if (screen === 'tower') towerKey(e.code);
   else if (screen === 'lobby') lobbyKey(e.code);
   else if (screen === 'results') { if (e.code === 'Enter' || e.code === 'Escape' || e.code === 'Space') closeResults(); }
   else gameKey(e.code);
@@ -312,33 +348,42 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 
-/** Left/right on the "Levels", "Start at" and "Mode" rows; shared by the menu and the host's lobby. */
-function changeSetting(row: number, d: number) {
-  if (row === 0) { menu.set = (menu.set + d + SETS.length) % SETS.length; menu.level = 0; }
-  if (row === 1) { const n = SETS[menu.set].levels.length; menu.level = (menu.level + d + n) % n; }
-  if (row === 2) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
+function startLocal(level: number) {
+  levels = TOWER;
+  gameSet = TOWER_SET;
+  practice = level !== FLOOR_START[floorOf(level)];
+  game = newGame(levels, menu.mode + 1, level, (Date.now() & 0x7fffffff) | 1, MODES[menu.gmode].id);
+  acc = 0;
+  pausePulse = false;
+  screen = 'game';
+  keys.clear();
 }
 
 function menuKey(code: string) {
-  if (code === 'ArrowUp') menu.row = (menu.row + 3) % 4;
-  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 4;
+  if (code === 'ArrowUp' || code === 'ArrowDown') menu.row = 1 - menu.row;
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
-  if (d && menu.row < 3) changeSetting(menu.row, d);
-  if (d && menu.row === 3) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
+  if (d && menu.row === 0) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
+  if (d && menu.row === 1) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
   if (code === 'Enter' || code === 'Space') {
-    if (menu.mode === 2) openHost();
+    if (menu.mode === 2) { menu.floor = floorOf(reach); openHost(); }
     else if (menu.mode === 3) openJoin();
     else if (menu.mode === 0 && MODES[menu.gmode].id !== 'classic') return; // needs 2+ players: the menu says so
-    else {
-      levels = SETS[menu.set].levels;
-      gameSet = menu.set;
-      game = newGame(levels, menu.mode + 1, menu.level, (Date.now() & 0x7fffffff) | 1, MODES[menu.gmode].id);
-      acc = 0;
-      pausePulse = false;
-      screen = 'game';
-      keys.clear();
-    }
+    else if (MODES[menu.gmode].id === 'versus') startLocal(0); // versus makes its own arenas
+    else { menu.floor = floorOf(reach); menu.level = 0; screen = 'tower'; }
   }
+}
+
+/** Is this level of the selected floor one the player has seen? */
+const seen = (floor: number, k: number) => FLOOR_START[floor] + k <= reach;
+
+function towerKey(code: string) {
+  if (code === 'Escape') { screen = 'menu'; return; }
+  const top = floorOf(reach);
+  if (code === 'ArrowUp' && menu.floor < top) { menu.floor++; menu.level = 0; }
+  if (code === 'ArrowDown' && menu.floor > 0) { menu.floor--; menu.level = 0; }
+  if (code === 'ArrowRight' && seen(menu.floor, menu.level + 1) && menu.level + 1 < FLOORS[menu.floor].levels.length) menu.level++;
+  if (code === 'ArrowLeft' && menu.level > 0) menu.level--;
+  if (code === 'Enter' || code === 'Space') startLocal(FLOOR_START[menu.floor] + menu.level);
 }
 
 function lobbyKey(code: string) {
@@ -348,10 +393,10 @@ function lobbyKey(code: string) {
     return;
   }
   if (net.role === 'host') {
-    if (code === 'ArrowUp') net.row = (net.row + 2) % 3;
-    if (code === 'ArrowDown') net.row = (net.row + 1) % 3;
+    if (code === 'ArrowUp' || code === 'ArrowDown') net.row = 1 - net.row;
     const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
-    if (d && !net.start) changeSetting(net.row, d);
+    if (d && !net.start && net.row === 0) menu.floor = Math.max(0, Math.min(partyFloor(), menu.floor + d));
+    if (d && !net.start && net.row === 1) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
     if (code === 'Enter' && net.status === 'connected') hostStart();
     if (code === 'KeyC' && net.code) navigator.clipboard?.writeText(inviteLink()).then(() => { net.copied = true; }, () => {});
   } else if (net.status === 'enter') {
@@ -416,8 +461,21 @@ function tapUI(x: number, y: number): boolean {
   const near = (yy: number, r = 18) => Math.abs(y - yy) < r;
   const dir = x > VIEW_W / 2 ? 'ArrowRight' : 'ArrowLeft';
   if (screen === 'menu') {
-    for (let i = 0; i < 4; i++) if (near(MENU_Y.rows + i * MENU_Y.gap, 20)) { menu.row = i; menuKey(dir); }
+    for (let i = 0; i < 2; i++) if (near(MENU_Y.rows + i * MENU_Y.gap, 20)) { menu.row = i; menuKey(dir); }
     if (near(MENU_Y.go, 30)) menuKey('Enter');
+    return true;
+  }
+  if (screen === 'tower') {
+    const U = TOWER_UI;
+    if (close) towerKey('Escape');
+    else if (x < U.listX - 30) {
+      const f = FLOORS.length - 1 - Math.floor((y - U.top) / (U.slabH + U.gap));
+      if (f >= 0 && f <= floorOf(reach)) { menu.floor = f; menu.level = 0; }
+    } else if (y > U.goY - 26) towerKey('Enter');
+    else {
+      const k = Math.round((y - U.listY) / U.listGap);
+      if (k >= 0 && k < FLOORS[menu.floor].levels.length && seen(menu.floor, k)) menu.level = k;
+    }
     return true;
   }
   if (screen === 'results') { closeResults(); return true; }
@@ -426,9 +484,8 @@ function tapUI(x: number, y: number): boolean {
     else if (net.status === 'error') lobbyKey('Enter');
     else if (net.role === 'host') {
       if (near(LOBBY_Y.link, 30) && net.code) shareInvite();
-      else if (near(LOBBY_Y.set)) { net.row = 0; lobbyKey(dir); }
-      else if (near(LOBBY_Y.level)) { net.row = 1; lobbyKey(dir); }
-      else if (near(LOBBY_Y.mode)) { net.row = 2; lobbyKey(dir); }
+      else if (near(LOBBY_Y.floor)) { net.row = 0; lobbyKey(dir); }
+      else if (near(LOBBY_Y.mode)) { net.row = 1; lobbyKey(dir); }
       else if (y > LOBBY_Y.start - 24) lobbyKey('Enter');
     } else if (net.status === 'enter') {
       const typed = (window.prompt('Room code (4 letters)') ?? '').trim();
@@ -513,9 +570,10 @@ function frame(now: number) {
     }
     if (session.events.length) { playEvents(session.events); fxEvents(session.events); session.events.length = 0; }
     const s = session.predicted;
+    reached(session.confirmed);
     const waiting = session.stalled && session.silence > 20;
     const status = session.desync ? 'OUT OF SYNC - restart the game' : `online  ${session.frame - session.confirmedFrame}f`;
-    drawGame(ctx, s, levelAt(s, levels), levels.length, dt, waiting, { you: net.me, status });
+    drawGame(ctx, s, levelAt(s, levels), where(s), dt, waiting, { you: net.me, status });
     if (session.silence > 600) { if (net.role === 'host') endSession(); else fail('Connection lost.'); }
   } else if (screen === 'game' && game) {
     acc += dt;
@@ -524,22 +582,28 @@ function frame(now: number) {
       step(game, readInputs(game.players.length), levels, events);
     }
     if (events.length) { playEvents(events); fxEvents(events); events.length = 0; }
-    drawGame(ctx, game, levelAt(game, levels), levels.length, game.paused ? 0 : dt, false);
+    if (!practice && levels === TOWER) reached(game);
+    drawGame(ctx, game, levelAt(game, levels), where(game), game.paused ? 0 : dt, false);
   } else if (screen === 'lobby') {
     menu.t += dt;
     const host = net.role === 'host';
-    const set = SETS[host ? menu.set : net.hostSet] ?? SETS[0];
-    const lvl = host ? menu.level : net.hostLevel;
     drawLobby(ctx, {
       role: net.role, status: net.status, code: net.code, typed: net.typed, msg: net.msg,
       link: net.code ? inviteLink() : '', copied: net.copied, t: menu.t, row: net.row, starting: !!net.start,
-      setName: set.name, levelName: `${lvl + 1}. ${set.levels[lvl]?.name ?? ''}`, room: roomLine(),
+      floor: host ? Math.min(menu.floor, partyFloor()) : net.hostFloor, room: roomLine(),
+      reached: host ? partyFloors() : Object.keys(net.floors).map((k) => net.floors[+k]),
       modeName: MODES[host ? menu.gmode : net.hostMode]?.name ?? '', modeHint: MODES[host ? menu.gmode : net.hostMode]?.hint ?? '',
+    });
+  } else if (screen === 'tower') {
+    menu.t += dt;
+    const top = floorOf(reach);
+    drawTower(ctx, {
+      t: menu.t, floor: menu.floor, level: menu.level,
+      floors: FLOORS.map((f, i) => ({ name: f.name, locked: i > top, levels: f.levels.map((L, k) => (seen(i, k) ? L.name : '')) })),
     });
   } else {
     menu.t += dt;
-    const set = SETS[menu.set];
-    drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, setName: set.name, levelName: `${menu.level + 1}. ${set.levels[menu.level].name}`, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode] });
+    drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode] });
   }
   if (portrait()) drawRotate(ctx);
   requestAnimationFrame(frame);
@@ -550,6 +614,8 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__dbg = {
     net, menu,
+    get reach() { return reach; },
+    set reach(v: number) { reach = v; },
     get screen() { return screen; },
     get session() { return session; },
   };
@@ -560,13 +626,20 @@ const jump = /^(\w+)-(\d+)$/.exec(new URLSearchParams(location.search).get('play
 if (jump) {
   const si = SETS.findIndex((x) => x.id === jump[1]);
   if (si >= 0 && SETS[si].levels[+jump[2] - 1]) {
-    menu.set = si;
-    menu.level = +jump[2] - 1;
     levels = SETS[si].levels;
     gameSet = si;
-    game = newGame(levels, 1, menu.level, 12345);
+    practice = true;
+    game = newGame(levels, 1, +jump[2] - 1, 12345);
     screen = 'game';
   }
+}
+
+// Dev server only: ?reach=20 opens the tower as if level 20 had been reached (not saved).
+const fake = +(new URLSearchParams(location.search).get('reach') ?? 0);
+if (import.meta.env.DEV && fake > 0) {
+  reach = Math.min(TOWER.length, fake) - 1;
+  menu.floor = floorOf(reach);
+  screen = 'tower';
 }
 
 // Invite links look like https://your.site/#ABCD
