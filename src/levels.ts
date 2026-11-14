@@ -127,8 +127,8 @@ export const CAMPAIGN: Level[] = [
   {
     name: 'Pressure Cooker',
     hint: 'Lower roof, shorter bounces, faster everything.',
-    time: 80,
-    ceiling: { speed: 9, lift: 8 },
+    time: 50,
+    ceiling: { speed: 9, lift: 0 }, // reaches head height at ~48 s
     ramp: 0.01,
     start: [480, 400],
     balls: [

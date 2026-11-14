@@ -193,7 +193,7 @@ export type GameEvent =
   | { t: 'spike'; x: number; y: number; size: number }
   | { t: 'knock'; x: number; y: number }
   | { t: 'flip' }
-  | { t: 'shoot'; weapon: Weapon }
+  | { t: 'shoot'; weapon: Weapon; p: number }
   | { t: 'pickup'; kind: PickupKind }
   | { t: 'shield' }
   | { t: 'die'; x: number }
@@ -447,7 +447,7 @@ function stepPlayers(s: State, inputs: number[], L: Level, ev: GameEvent[], canF
       shot('wire', p.x, H - PH, { sticky: w === 'anchor', lim: w === 'stub' ? H - PH - STUB_REACH : 0 });
     }
     s.players[o].st.shots++;
-    ev.push({ t: 'shoot', weapon: w });
+    ev.push({ t: 'shoot', weapon: w, p: o });
   });
   // riders go wherever their body goes
   for (const p of s.players) {

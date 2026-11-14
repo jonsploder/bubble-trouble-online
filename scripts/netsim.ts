@@ -28,6 +28,8 @@ export interface SimResult {
   /** Largest gap between any two players' frame counters seen after the first second. */
   maxFrameGap: number;
   phase: string;
+  /** Per player: sounds heard (by type), and the events that really happened in the confirmed game. */
+  heard: Record<string, number>[];
 }
 
 export function simulate(levels: Level[], level: number, seed: number, peers: PeerScript[], link: LinkModel): SimResult {
@@ -40,6 +42,7 @@ export function simulate(levels: Level[], level: number, seed: number, peers: Pe
   }));
   const idx = peers.map(() => 0), acc = peers.map(() => 0), last = peers.map((p) => p.frames[0]);
   let maxFrameGap = 0;
+  const heard: Record<string, number>[] = peers.map(() => ({}));
   for (;;) {
     // next display frame across all peers; stop when anyone runs out
     let p = -1, t = Infinity, done = false;
@@ -57,6 +60,9 @@ export function simulate(levels: Level[], level: number, seed: number, peers: Pe
     last[p] = now;
     acc[p] = Math.min(acc[p] + dt * ses[p].rate, DT * 4);
     while (acc[p] >= DT) { acc[p] -= DT; ses[p].tick(peers[p].inputAt(now), now); }
+    for (const e of ses[p].sounds) heard[p][e.t] = (heard[p][e.t] ?? 0) + 1;
+    ses[p].sounds.length = 0;
+    ses[p].events.length = 0;
     if (now > 1000) {
       const fr = ses.map((s) => s.frame);
       maxFrameGap = Math.max(maxFrameGap, Math.max(...fr) - Math.min(...fr));
@@ -74,7 +80,7 @@ export function simulate(levels: Level[], level: number, seed: number, peers: Pe
   }
   return {
     stats: ses.map((s) => s.stats), desync: ses.some((s) => s.desync), compared, mismatched,
-    frames: ses.map((s) => s.frame), confirmed: ses.map((s) => s.confirmedFrame), maxFrameGap, phase: ses[0].confirmed.phase,
+    frames: ses.map((s) => s.frame), confirmed: ses.map((s) => s.confirmedFrame), maxFrameGap, phase: ses[0].confirmed.phase, heard,
   };
 }
 

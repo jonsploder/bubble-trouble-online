@@ -33,6 +33,9 @@ export const tuning = {
 };
 export const INPUT_DELAY = tuning.inputDelay;
 const CHECK_EVERY = 120;
+/** Frames a sound waits for confirmation before playing the prediction instead (~170 ms). */
+const SOUND_WAIT = 10;
+const soundKey = (e: GameEvent) => e.t + ':' + ('p' in e ? e.p : '') + ':' + ('weapon' in e ? e.weapon : 'kind' in e ? e.kind : '');
 
 export interface InputMsg {
   t: 'in';
@@ -94,8 +97,16 @@ export class RollbackSession {
   confirmedFrame = 0;
   confirmed: State;
   predicted: State;
-  /** Events from the newest frame only; the caller drains this. */
+  /** Events from the newest frame only, for visual effects; the caller drains this. */
   events: GameEvent[] = [];
+  /**
+   * Events to play as sound; the caller drains this. A guess about another player can be
+   * wrong (a death that didn't happen) or arrive a frame late and be re-run (a shot), so
+   * sounds come from confirmed frames, which usually trail by a frame or two. Your own
+   * shots sound at once, and a frame still unconfirmed after SOUND_WAIT frames plays
+   * its best guess rather than go quiet.
+   */
+  sounds: GameEvent[] = [];
   desync = false;
   stalled = false;
   /** Multiply real elapsed time by this before ticking. */
@@ -117,6 +128,10 @@ export class RollbackSession {
   private peerSums = new Map<number, number>();
   private lastCf = 0;
   private scratch: GameEvent[] = [];
+  /** Latest prediction's events for each unconfirmed frame. */
+  private guessed = new Map<number, GameEvent[]>();
+  /** Sound keys already played ahead of confirmation, per frame. */
+  private early = new Map<number, string[]>();
   private lastT = 0;
   private lastRx: number[];
   private lastIn = -1;
@@ -207,6 +222,22 @@ export class RollbackSession {
     return this.log;
   }
 
+  /** Remember a predicted frame's events, and sound our own shots straight away. */
+  private guess_(f: number, ev: GameEvent[]) {
+    if (f < this.confirmedFrame) return;
+    const mine = ev.filter((e) => e.t === 'shoot' && e.p === this.me);
+    const done = this.early.get(f) ?? [];
+    for (const e of mine) if (!done.includes(soundKey(e))) this.playEarly(f, e);
+    this.guessed.set(f, ev.filter((e) => !mine.includes(e)));
+  }
+
+  private playEarly(f: number, e: GameEvent) {
+    const list = this.early.get(f) ?? [];
+    list.push(soundKey(e));
+    this.early.set(f, list);
+    this.sounds.push(e);
+  }
+
   /** Prediction for an input we don't have yet: same as that player's last, minus one-shot bits. */
   private guess(p: number): number {
     const a = this.inputs[p];
@@ -241,6 +272,13 @@ export class RollbackSession {
     while (this.confirmedFrame < known) {
       const f = this.confirmedFrame;
       step(this.confirmed, this.inputsAt(f), this.levels, ev);
+      const played = this.early.get(f);
+      for (const e of ev) {
+        const k = played ? played.indexOf(soundKey(e)) : -1;
+        if (k >= 0) played!.splice(k, 1); else this.sounds.push(e);
+      }
+      this.early.delete(f);
+      this.guessed.delete(f);
       ev.length = 0;
       const shown = this.shown[f];
       this.stats.confirmed++;
@@ -274,11 +312,23 @@ export class RollbackSession {
       this.predicted = JSON.parse(JSON.stringify(this.confirmed));
       for (let f = this.confirmedFrame; f < this.frame; f++) {
         const fresh = stepped && f === this.frame - 1;
-        step(this.predicted, this.inputsAt(f), this.levels, fresh ? this.events : ev);
+        step(this.predicted, this.inputsAt(f), this.levels, ev);
+        if (fresh) this.events.push(...ev);
+        this.guess_(f, ev);
         ev.length = 0;
       }
     } else if (stepped) {
-      step(this.predicted, this.inputsAt(this.frame - 1), this.levels, this.events);
+      step(this.predicted, this.inputsAt(this.frame - 1), this.levels, ev);
+      this.events.push(...ev);
+      this.guess_(this.frame - 1, ev);
+      ev.length = 0;
+    }
+    // Waited long enough for this frame: play what we think happened.
+    const late = this.frame - 1 - SOUND_WAIT;
+    const g = this.guessed.get(late);
+    if (late >= this.confirmedFrame && g) {
+      for (const e of g) this.playEarly(late, e);
+      this.guessed.delete(late);
     }
     if (stepped) this.shown[this.frame - 1] = this.predicted.players.map((p) => p.x);
   }
