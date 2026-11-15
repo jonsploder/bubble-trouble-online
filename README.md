@@ -1,4 +1,4 @@
-# Splitstorm
+# Overpopped
 
 A browser game about popping bouncing balls that split when you hit them. One to four
 players, on one keyboard or online, peer to peer. It's a static site (GitHub Pages) plus

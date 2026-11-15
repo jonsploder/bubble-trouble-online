@@ -128,7 +128,7 @@ function groupCount(xs: string[]) { const m = new Map<string, number>(); for (co
 // ------------------------------------------------------------------ page
 const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Splitstorm report</title>
+<title>Overpopped report</title>
 <style>
 :root { --bg:#f7f7fb; --fg:#1b1d2e; --muted:#6b6f8a; --line:#dfe1ee; --card:#fff; --accent:#4c5bd4; --ok:#2f9e44; --warn:#e8590c; --bad:#c92a2a; --easy:#1c7ed6; }
 @media (prefers-color-scheme: dark) { :root { --bg:#0d0f1c; --fg:#e7e9f8; --muted:#8a90b8; --line:#262a44; --card:#141729; --accent:#8c96ff; --ok:#69db7c; --warn:#ffa94d; --bad:#ff8787; --easy:#74c0fc; } }
@@ -151,7 +151,7 @@ tr.total td { font-weight: 600; background: color-mix(in srgb, var(--accent) 8%,
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
 .card b { display: block; font-size: 22px; } .card span { color: var(--muted); font-size: 12px; }
 </style></head><body><main>
-<h1>Splitstorm report</h1>
+<h1>Overpopped report</h1>
 <div class="sub">Generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC from ${results.length} recorded online sessions and ${recs.length} games of level stats.</div>
 <div class="cards">
   <div class="card"><b>${results.length}</b><span>online sessions (${mins(allSecs)} min)</span></div>

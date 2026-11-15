@@ -455,15 +455,30 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
     const quit = net ? 'quit to lobby' : 'quit to menu';
     ctx.fillStyle = 'rgba(7,8,15,0.88)';
     ctx.fillRect(0, 0, W, H);
-    text(ctx, 'PAUSED', W / 2, 46, 40, '#fff');
-    text(ctx, net ? 'Paused for everyone' : L.hint ?? '', W / 2, 82, 14, '#8a90c7', 'center', 400);
-    // every mode's rules, the one being played picked out
-    MODES.forEach((m, k) => {
-      const y = 122 + k * 46, on = m.id === s.mode;
-      if (on) { ctx.fillStyle = 'rgba(255,212,59,0.08)'; ctx.fillRect(40, y - 20, W - 80, 42); }
-      text(ctx, m.name, 60, y - 6, 15, on ? '#ffd43b' : '#cfd4ff', 'left');
-      text(ctx, m.hint, 60, y + 11, 12, on ? '#fff' : '#8a90c7', 'left', 400);
+    text(ctx, 'PAUSED', W / 2, 70, 40, '#fff');
+    text(ctx, net ? 'Paused for everyone' : L.hint ?? '', W / 2, 106, 14, '#8a90c7', 'center', 400);
+    // the rules of the mode being played (classic needs none)
+    const m = MODES.find((x) => x.id === s.mode);
+    if (m && m.id !== 'classic') {
+      text(ctx, m.name, W / 2, 150, 16, '#ffd43b');
+      wrap(ctx, m.hint, 13, 640).slice(0, 2).forEach((l, i) => text(ctx, l, W / 2, 172 + i * 17, 13, '#cfd4ff', 'center', 400));
+    }
+    // this run so far
+    let ticks = s.lt;
+    for (const h of s.hist) ticks += h[1];
+    const secs = Math.floor(ticks / 60), pops = s.players.reduce((a, p) => a + p.st.pops, 0), falls = s.players.reduce((a, p) => a + p.st.deaths, 0);
+    const stats: [string, string][] = [
+      [s.mode === 'versus' ? 'Round' : where.includes('·') ? 'Floor' : 'Level', s.mode === 'versus' ? String(s.level + 1) : where],
+      ['Run time', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`],
+      ['Popped', String(pops)],
+      ['Falls', String(falls)],
+    ];
+    stats.forEach(([k, val], i) => {
+      const x = W / 2 + (i - 1.5) * 170;
+      text(ctx, k.toUpperCase(), x, 250, 12, '#8a90c7');
+      text(ctx, val, x, 278, 22, '#fff');
     });
+    text(ctx, L.name, W / 2, 322, 15, '#cfd4ff', 'center', 400);
     if (touch) {
       text(ctx, 'RESUME', W * 0.3, 418, 28, '#8ce99a');
       text(ctx, 'QUIT', W * 0.7, 418, 28, '#ff8787');
@@ -599,8 +614,8 @@ export interface MenuView {
 
 export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   backdrop(ctx, m.t);
-  text(ctx, 'SPLITSTORM', W / 2, 110, 72, '#fff');
-  text(ctx, 'pop them all. mind the little ones.', W / 2, 162, 16, '#cfd4ff', 'center', 400);
+  text(ctx, 'OVERPOPPED', W / 2, 110, 72, '#fff');
+  text(ctx, 'they multiply. you don\'t.', W / 2, 162, 16, '#cfd4ff', 'center', 400);
   const rows = [`Mode:     <  ${m.gameMode.name}  >`, `Play:     <  ${m.playName}  >`];
   rows.forEach((r, i) => text(ctx, r, W / 2, MENU_Y.rows + i * MENU_Y.gap, 22, m.row === i ? '#ffd43b' : '#8a90c7'));
   const hint = m.gameMode.id === 'classic' ? '' : m.gameMode.hint;

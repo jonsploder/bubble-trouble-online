@@ -460,7 +460,7 @@ function goFullscreen() {
 
 function shareInvite() {
   const url = inviteLink();
-  if (navigator.share) navigator.share({ title: 'Splitstorm', url }).catch(() => {});
+  if (navigator.share) navigator.share({ title: 'Overpopped', url }).catch(() => {});
   else navigator.clipboard?.writeText(url).then(() => { net.copied = true; }, () => {});
 }
 
