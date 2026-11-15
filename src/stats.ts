@@ -36,35 +36,58 @@ export function saveLife() {
   try { localStorage.setItem(KEY, JSON.stringify(life)); } catch { /* ignore */ }
 }
 
+// The game in progress is counted as it goes (every few seconds, when the tab is hidden or
+// closed, and when it ends), so quitting halfway or closing the tab loses nothing. `base`
+// holds what has already been counted, so nothing is counted twice.
+type Live = { s: State; mine: number[] } | null;
+let live: () => Live = () => null;
+let base = { players: [] as { pops: number; deaths: number; shots: number; picks: number }[], hist: 0 };
+/** Tell the stats where to find the game being played (its confirmed state, online) and whose numbers are ours. */
+export function watchGame(get: () => Live) { live = get; }
+
+function commit() {
+  const g = live();
+  if (!g) return;
+  const { s, mine } = g;
+  for (const i of mine) {
+    const p = s.players[i];
+    if (!p) continue;
+    const b = (base.players[i] ??= { pops: 0, deaths: 0, shots: 0, picks: 0 });
+    life.pops += p.st.pops - b.pops;
+    life.deaths += p.st.deaths - b.deaths;
+    life.shots += p.st.shots - b.shots;
+    life.picks += p.st.picks - b.picks;
+    base.players[i] = { pops: p.st.pops, deaths: p.st.deaths, shots: p.st.shots, picks: p.st.picks };
+  }
+  if (s.mode !== 'versus') life.levelsCleared += s.hist.slice(base.hist).filter((h) => h[2] === 1).length;
+  base.hist = s.hist.length;
+}
+
+/** Count what's happened so far and write it all to storage. */
+export function saveNow() {
+  commit();
+  saveLife();
+}
+
 let unsaved = 0;
 /** Count game time; saves every 10 s or so. */
 export function addPlayTime(dt: number) {
   life.playSecs += dt;
   unsaved += dt;
-  if (unsaved > 10) { unsaved = 0; saveLife(); }
+  if (unsaved > 10) { unsaved = 0; saveNow(); }
 }
 
 export function gameStarted(online: boolean) {
+  base = { players: [], hist: 0 };
   life.games++;
   if (online) life.onlineGames++;
   saveLife();
 }
 
-/**
- * A game ended. `mine` lists the players at this screen: everyone in a local game, just
- * you online. Levels are counted once per game, not per player.
- */
-export function gameEnded(s: State, mine: number[]) {
-  for (const i of mine) {
-    const p = s.players[i];
-    if (!p) continue;
-    life.pops += p.st.pops;
-    life.deaths += p.st.deaths;
-    life.shots += p.st.shots;
-    life.picks += p.st.picks;
-  }
-  if (s.mode !== 'versus') life.levelsCleared += s.hist.filter((h) => h[2] === 1).length;
-  saveLife();
+/** A game ended: count the rest of it. Call before the game is let go. */
+export function gameEnded() {
+  saveNow();
+  base = { players: [], hist: 0 };
 }
 
 /** The last level of tower floor `f` was just cleared in `s` (a tower game). */

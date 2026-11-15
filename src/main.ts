@@ -1,6 +1,6 @@
 import { playEvents, unlockAudio } from './audio';
 import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
-import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveLife } from './stats';
+import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveNow, watchGame } from './stats';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
 import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawStats, drawTower, STATS_UI, fxEvents, setTouch } from './render';
@@ -239,7 +239,7 @@ function endSession() {
 
 function showResults(s: State, set: number, you: number, online: boolean) {
   results = { s: JSON.parse(JSON.stringify(s)), set, you, online };
-  gameEnded(s, online ? [you] : s.players.map((_, i) => i));
+  gameEnded();
   awardHelp = -1;
   screen = 'results';
   keys.clear();
@@ -542,8 +542,10 @@ canvas.addEventListener('mousemove', (e) => {
   awardHelp = awardAt(((e.clientX - r.left) / r.width) * VIEW_W, ((e.clientY - r.top) / r.height) * VIEW_H);
 });
 
-window.addEventListener('pagehide', saveLife);
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveLife(); });
+// Lifetime stats count the game in progress: online only our own player, from the confirmed game.
+watchGame(() => (session ? { s: session.confirmed, mine: [net.me] } : game ? { s: game, mine: game.players.map((_, i) => i) } : null));
+window.addEventListener('pagehide', saveNow);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
 
 window.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse') return;
