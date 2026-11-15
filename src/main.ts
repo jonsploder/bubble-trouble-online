@@ -1,8 +1,9 @@
 import { playEvents, unlockAudio } from './audio';
 import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
+import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveLife } from './stats';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
-import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawTower, fxEvents, setTouch } from './render';
+import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawStats, drawTower, STATS_UI, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
 import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
@@ -31,7 +32,7 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
 
 // ---------------------------------------------------------------- state
-type Screen = 'menu' | 'tower' | 'lobby' | 'game' | 'results';
+type Screen = 'menu' | 'tower' | 'lobby' | 'game' | 'results' | 'stats';
 let screen: Screen = 'menu';
 let levels: Level[] = TOWER;
 let game: State | null = null; // local play
@@ -181,6 +182,7 @@ function beginSession(m: StartMsg) {
   net.meta = { version: VERSION, gid: m.gid, set: m.set, level: m.level, seed: m.seed, date: new Date().toISOString(), inputDelay: INPUT_DELAY, players: m.seats.length, mode: m.gm };
   session = new RollbackSession(levels, me, newGame(levels, m.seats.length, m.level, m.seed, m.gm), (to, msg) => room.send(m.seats[to], { ...msg, gid: m.gid }));
   sessionT0 = performance.now();
+  gameStarted(true);
   acc = 0;
   pausePulse = false;
   screen = 'game';
@@ -237,6 +239,7 @@ function endSession() {
 
 function showResults(s: State, set: number, you: number, online: boolean) {
   results = { s: JSON.parse(JSON.stringify(s)), set, you, online };
+  gameEnded(s, online ? [you] : s.players.map((_, i) => i));
   awardHelp = -1;
   screen = 'results';
   keys.clear();
@@ -347,6 +350,7 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   keys.add(e.code);
   if (screen === 'menu') menuKey(e.code);
+  else if (screen === 'stats') { if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'KeyS' || e.code === 'Space') screen = 'menu'; }
   else if (screen === 'tower') towerKey(e.code);
   else if (screen === 'lobby') lobbyKey(e.code);
   else if (screen === 'results') { if (e.code === 'Enter' || e.code === 'Escape' || e.code === 'Space') closeResults(); }
@@ -360,6 +364,7 @@ function startLocal(level: number) {
   gameSet = TOWER_SET;
   practice = level !== FLOOR_START[floorOf(level)];
   game = newGame(levels, menu.mode + 1, level, (Date.now() & 0x7fffffff) | 1, MODES[menu.gmode].id);
+  gameStarted(false);
   acc = 0;
   pausePulse = false;
   screen = 'game';
@@ -367,6 +372,7 @@ function startLocal(level: number) {
 }
 
 function menuKey(code: string) {
+  if (code === 'KeyS') { screen = 'stats'; return; }
   if (code === 'ArrowUp' || code === 'ArrowDown') menu.row = 1 - menu.row;
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
   if (d && menu.row === 0) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
@@ -471,7 +477,9 @@ function tapUI(x: number, y: number): boolean {
   const close = x >= c.x - 10 && y <= c.y + c.h + 10;
   const near = (yy: number, r = 18) => Math.abs(y - yy) < r;
   const dir = x > VIEW_W / 2 ? 'ArrowRight' : 'ArrowLeft';
+  if (screen === 'stats') { screen = 'menu'; return true; }
   if (screen === 'menu') {
+    if (near(STATS_UI.menuY, 20)) { screen = 'stats'; return true; }
     for (let i = 0; i < 2; i++) if (near(MENU_Y.rows + i * MENU_Y.gap, 20)) { menu.row = i; menuKey(dir); }
     if (near(MENU_Y.go, 30)) menuKey('Enter');
     return true;
@@ -533,6 +541,9 @@ canvas.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect();
   awardHelp = awardAt(((e.clientX - r.left) / r.width) * VIEW_W, ((e.clientY - r.top) / r.height) * VIEW_H);
 });
+
+window.addEventListener('pagehide', saveLife);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveLife(); });
 
 window.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse') return;
@@ -603,7 +614,15 @@ function frame(now: number) {
       session.tick(readInputs(1)[0], now - sessionT0);
     }
     if (session.events.length) { fxEvents(session.events); session.events.length = 0; }
-    if (session.sounds.length) { playEvents(session.sounds); session.sounds.length = 0; }
+    if (session.sounds.length) {
+      if (session.sounds.some((e) => e.t === 'floor')) {
+        const fs = session.confirmed.phase === 'clear' ? session.confirmed : session.predicted;
+        const f = levelAt(fs, levels).floor;
+        if (f) floorCleared(fs, f - 1);
+      }
+      playEvents(session.sounds); session.sounds.length = 0;
+    }
+    if (!session.predicted.paused && session.predicted.phase !== 'over' && session.predicted.phase !== 'won') addPlayTime(dt);
     const s = session.predicted;
     reached(session.confirmed);
     const waiting = session.stalled && session.silence > 20;
@@ -616,7 +635,12 @@ function frame(now: number) {
       acc -= DT;
       step(game, readInputs(game.players.length), levels, events);
     }
-    if (events.length) { playEvents(events); fxEvents(events); events.length = 0; }
+    if (events.length) {
+      const f = levelAt(game, levels).floor;
+      if (f && levels === TOWER && events.some((e) => e.t === 'floor')) floorCleared(game, f - 1);
+      playEvents(events); fxEvents(events); events.length = 0;
+    }
+    if (!game.paused && game.phase !== 'over' && game.phase !== 'won') addPlayTime(dt);
     if (!practice && levels === TOWER) reached(game);
     drawGame(ctx, game, levelAt(game, levels), where(game), game.paused ? 0 : dt, false);
   } else if (screen === 'lobby') {
@@ -630,12 +654,15 @@ function frame(now: number) {
       reached, floors: towerView(reached.length ? Math.min(...reached) : floorOf(reach)),
       modeName: MODES[host ? menu.gmode : net.hostMode]?.name ?? '', modeHint: MODES[host ? menu.gmode : net.hostMode]?.hint ?? '',
     });
+  } else if (screen === 'stats') {
+    menu.t += dt;
+    drawStats(ctx, { life, floors: FLOORS.map((f, i) => (i <= floorOf(reach) ? f.name : '')) });
   } else if (screen === 'tower') {
     menu.t += dt;
     drawTower(ctx, { t: menu.t, floor: menu.floor, level: menu.level, floors: towerView(floorOf(reach)) });
   } else {
     menu.t += dt;
-    drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode] });
+    drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode], playSecs: life.playSecs });
   }
   if (portrait()) drawRotate(ctx);
   requestAnimationFrame(frame);

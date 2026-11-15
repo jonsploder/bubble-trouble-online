@@ -1,5 +1,7 @@
 import { FLOOR_UP_TICKS, H, PH, PW, RADII, W, hasSpikes, levelAt, stopY } from './sim';
 import { FLOORS, FLOOR_START } from './levels';
+import { clock, longTime } from './stats';
+import type { Lifetime } from './stats';
 import type { GameEvent, Level, PickupKind, State, Mode } from './sim';
 import { LANCE_LEN, MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, SWORD_REACH, TETHER, VERSUS_WINS, roped } from './sim';
 
@@ -610,7 +612,9 @@ export const MENU_Y = { rows: 250, gap: 44, go: 420 };
 export interface MenuView {
   /** The chosen mode needs more players than the chosen way of playing gives. */
   blocked: boolean;
-  row: number; t: number; gameMode: { id: Mode; name: string; hint: string }; playName: string }
+  row: number; t: number; gameMode: { id: Mode; name: string; hint: string }; playName: string;
+  /** Lifetime seconds played, shown under the menu. */
+  playSecs: number }
 
 export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   backdrop(ctx, m.t);
@@ -622,7 +626,61 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   if (hint) text(ctx, hint, W / 2, MENU_Y.rows + 2 * MENU_Y.gap, 13, '#8a90c7', 'center', 400);
   if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players`, W / 2, MENU_Y.go, 18, '#ff8787');
   else text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, MENU_Y.go, touch ? 26 : 22, '#8ce99a');
+  const played = m.playSecs >= 60 ? `${longTime(m.playSecs)} played   ·   ` : '';
+  text(ctx, played + (touch ? 'Tap here for stats' : 'S: stats'), W / 2, STATS_UI.menuY, 14, '#cfd4ff', 'center', 400);
   text(ctx, touch ? 'Tap a row to change it' : 'P1: arrows + Space      P2: A / D + W      P: pause   Esc: menu', W / 2, H + 30, 14, '#8a90c7', 'center', 400);
+}
+
+/** Where the stats link sits on the menu. */
+export const STATS_UI = { menuY: 462 };
+
+export interface StatsView {
+  life: Lifetime;
+  /** Floor names, or '' for floors not reached yet. */
+  floors: string[];
+}
+
+/** Lifetime numbers on the left, fastest clear of each floor on the right. */
+export function drawStats(ctx: CanvasRenderingContext2D, v: StatsView) {
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const L = v.life;
+  text(ctx, 'STATS', 40, 50, 30, '#fff', 'left');
+  const acc = L.shots >= 10 ? `${Math.round((100 * L.pops) / L.shots)}%` : '-';
+  const tiles: [string, string][] = [
+    ['Time played', L.playSecs >= 60 ? longTime(L.playSecs) : clock(L.playSecs)],
+    ['Games', String(L.games)],
+    ['Online games', String(L.onlineGames)],
+    ['Bubbles popped', L.pops.toLocaleString()],
+    ['Falls', L.deaths.toLocaleString()],
+    ['Accuracy', acc],
+    ['Levels cleared', String(L.levelsCleared)],
+    ['Floors cleared', String(L.floorsCleared)],
+    ['Pops per fall', L.deaths ? (L.pops / L.deaths).toFixed(1) : '-'],
+  ];
+  tiles.forEach(([k, val], i) => {
+    const x = 40 + (i % 3) * 140, y = 112 + Math.floor(i / 3) * 96;
+    ctx.fillStyle = '#10122a';
+    ctx.fillRect(x, y, 128, 82);
+    ctx.strokeStyle = '#2b2f55';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, 128, 82);
+    text(ctx, k.toUpperCase(), x + 12, y + 22, 10, '#8a90c7', 'left');
+    text(ctx, val, x + 12, y + 54, 24, '#fff', 'left');
+  });
+
+  const X = 500;
+  text(ctx, 'FASTEST FLOORS', X, 100, 12, '#ffa94d', 'left');
+  v.floors.forEach((name, i) => {
+    const y = 132 + i * 36, best = L.bestFloor[i];
+    text(ctx, String(i + 1), X, y, 16, name ? '#8a90c7' : '#5b6090', 'left');
+    text(ctx, name || '? ? ?', X + 30, y, 15, name ? '#e8eaf6' : '#5b6090', 'left', 600);
+    text(ctx, best ? clock(best) + '.' + Math.round((best % 1) * 10) : '-', W - 40, y - (best ? 6 : 0), best ? 17 : 15, best ? '#ffd43b' : '#5b6090', 'right');
+    if (best && L.bestFloorBy[i]) text(ctx, L.bestFloorBy[i], W - 40, y + 11, 10, '#8a90c7', 'right', 400);
+  });
+  if (touch) closeButton(ctx);
+  else text(ctx, 'Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
 }
 
 /** Layout of the tower screen (view coordinates), shared with the touch handling. */
