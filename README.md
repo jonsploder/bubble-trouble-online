@@ -53,8 +53,8 @@ All 57 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each f
 - A run starts at the first level of any unlocked floor with 3 lives each. Game over means starting that floor again.
 - Reaching a new floor unlocks it as a starting point and tops everyone's lives back up to 3.
 - Progress is kept in the browser's local storage (`splitstorm.tower.v2`) as the name of the highest level reached, so adding levels never moves anyone's place (an old `v1` save, a level number, is converted once). Solo and online play share it.
-- Lifetime stats (`splitstorm.stats.v1`, `src/stats.ts`): time played (shown on the menu), games, online games, bubbles popped, falls, accuracy, levels and floors cleared, and the fastest clear of each floor. A floor's time only counts if the run started on that floor's first level; it's the sum of every attempt on the floor, so falls cost time. **S** on the menu opens the stats screen. Online, each player keeps their own.
-- Finishing a floor plays a short ceremony (about 5 s, no choices): the floor fills gold, the next one unlocks and its name is revealed, with that floor's time and falls for the run.
+- Lifetime stats (`splitstorm.stats.v1`, `src/stats.ts`): time played (shown on the menu), games, online games, bubbles popped, shots fired, accuracy, deaths, drops picked up, levels and floors cleared, highest floor, and the fastest clear of each floor. A floor's time only counts if the run started on that floor's first level; it's the sum of every attempt on the floor, so deaths cost time. **S** on the menu opens the stats screen. Online, each player keeps their own.
+- Finishing a floor plays a short ceremony (about 5 s, no choices): the floor fills gold, the next one unlocks and its name is revealed, with that floor's time and deaths for the run.
 - The map shows names only for floors and levels already seen. A seen level can be picked directly for practice; practice runs save nothing.
 - Online, the host can start no higher than the lowest floor anyone in the room has reached. Everyone playing saves what the run reaches.
 - The game deliberately explains little. Level hints show only on the pause screen.

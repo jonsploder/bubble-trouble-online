@@ -468,12 +468,12 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
     // this run so far
     let ticks = s.lt;
     for (const h of s.hist) ticks += h[1];
-    const secs = Math.floor(ticks / 60), pops = s.players.reduce((a, p) => a + p.st.pops, 0), falls = s.players.reduce((a, p) => a + p.st.deaths, 0);
+    const secs = Math.floor(ticks / 60), pops = s.players.reduce((a, p) => a + p.st.pops, 0), deaths = s.players.reduce((a, p) => a + p.st.deaths, 0);
     const stats: [string, string][] = [
       [s.mode === 'versus' ? 'Round' : where.includes('·') ? 'Floor' : 'Level', s.mode === 'versus' ? String(s.level + 1) : where],
       ['Run time', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`],
       ['Popped', String(pops)],
-      ['Falls', String(falls)],
+      ['Deaths', String(deaths)],
     ];
     stats.forEach(([k, val], i) => {
       const x = W / 2 + (i - 1.5) * 170;
@@ -653,21 +653,24 @@ export function drawStats(ctx: CanvasRenderingContext2D, v: StatsView) {
     ['Games', String(L.games)],
     ['Online games', String(L.onlineGames)],
     ['Bubbles popped', L.pops.toLocaleString()],
-    ['Falls', L.deaths.toLocaleString()],
+    ['Shots fired', L.shots.toLocaleString()],
     ['Accuracy', acc],
+    ['Deaths', L.deaths.toLocaleString()],
+    ['Pops per death', L.deaths ? (L.pops / L.deaths).toFixed(1) : '-'],
+    ['Drops picked up', L.picks.toLocaleString()],
     ['Levels cleared', String(L.levelsCleared)],
     ['Floors cleared', String(L.floorsCleared)],
-    ['Pops per fall', L.deaths ? (L.pops / L.deaths).toFixed(1) : '-'],
+    ['Highest floor', String(v.floors.filter(Boolean).length)],
   ];
   tiles.forEach(([k, val], i) => {
-    const x = 40 + (i % 3) * 140, y = 112 + Math.floor(i / 3) * 96;
+    const x = 40 + (i % 3) * 140, y = 84 + Math.floor(i / 3) * 76;
     ctx.fillStyle = '#10122a';
-    ctx.fillRect(x, y, 128, 82);
+    ctx.fillRect(x, y, 128, 66);
     ctx.strokeStyle = '#2b2f55';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x, y, 128, 82);
-    text(ctx, k.toUpperCase(), x + 12, y + 22, 10, '#8a90c7', 'left');
-    text(ctx, val, x + 12, y + 54, 24, '#fff', 'left');
+    ctx.strokeRect(x, y, 128, 66);
+    text(ctx, k.toUpperCase(), x + 12, y + 18, 10, '#8a90c7', 'left');
+    text(ctx, val, x + 12, y + 44, 22, '#fff', 'left');
   });
 
   const X = 500;
@@ -908,10 +911,10 @@ function drawFloorUp(ctx: CanvasRenderingContext2D, s: State, f: number) {
 
   // the run's numbers for this floor
   const lo = FLOOR_START[f], hi = lo + floor.levels.length;
-  let ticks = 0, falls = 0;
-  for (const [lv, lt, ok] of s.hist) if (lv >= lo && lv < hi) { ticks += lt; if (!ok) falls++; }
+  let ticks = 0, deaths = 0;
+  for (const [lv, lt, , lost] of s.hist) if (lv >= lo && lv < hi) { ticks += lt; deaths += lost; }
   const secs = Math.round(ticks / 60);
-  const stats = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}   ·   ${falls === 0 ? 'no falls' : falls === 1 ? '1 fall' : `${falls} falls`}`;
+  const stats = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}   ·   ${deaths === 0 ? 'no deaths' : deaths === 1 ? '1 death' : `${deaths} deaths`}`;
   ctx.globalAlpha *= clamp01((T - 0.7) / 0.4);
   text(ctx, stats, W / 2, 142, 15, '#cfd4ff', 'center', 400);
   ctx.globalAlpha = Math.min(clamp01(T / 0.35), out);

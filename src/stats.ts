@@ -13,6 +13,8 @@ export interface Lifetime {
   pops: number;
   deaths: number;
   shots: number;
+  /** Drops (weapons, shields, extra time...) picked up. */
+  picks: number;
   levelsCleared: number;
   floorsCleared: number;
   /** Fastest clear of each floor in one run, in seconds (start of its first level to the end of its last), or 0. */
@@ -21,7 +23,7 @@ export interface Lifetime {
   bestFloorBy: string[];
 }
 
-const blank = (): Lifetime => ({ playSecs: 0, games: 0, onlineGames: 0, pops: 0, deaths: 0, shots: 0, levelsCleared: 0, floorsCleared: 0, bestFloor: FLOORS.map(() => 0), bestFloorBy: FLOORS.map(() => '') });
+const blank = (): Lifetime => ({ playSecs: 0, games: 0, onlineGames: 0, pops: 0, deaths: 0, shots: 0, picks: 0, levelsCleared: 0, floorsCleared: 0, bestFloor: FLOORS.map(() => 0), bestFloorBy: FLOORS.map(() => '') });
 
 export const life: Lifetime = blank();
 try {
@@ -59,6 +61,7 @@ export function gameEnded(s: State, mine: number[]) {
     life.pops += p.st.pops;
     life.deaths += p.st.deaths;
     life.shots += p.st.shots;
+    life.picks += p.st.picks;
   }
   if (s.mode !== 'versus') life.levelsCleared += s.hist.filter((h) => h[2] === 1).length;
   saveLife();
