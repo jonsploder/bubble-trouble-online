@@ -127,8 +127,8 @@ export const CAMPAIGN: Level[] = [
   {
     name: 'Pressure Cooker',
     hint: 'Lower roof, shorter bounces, faster everything.',
-    time: 50,
-    ceiling: { speed: 9, lift: 0 }, // reaches head height at ~48 s
+    time: 62,
+    ceiling: { speed: 7.2, lift: 0 }, // reaches head height at ~60 s
     ramp: 0.01,
     start: [480, 400],
     balls: [
@@ -647,8 +647,23 @@ export const TWISTS: Level[] = [
   },
 ];
 
-/** Levels built around one odd weapon each. */
+/** Levels made for the tower: Photo Finish, then one built around each odd weapon. */
 export const EXTRA: Level[] = [
+  {
+    // Everyone starts behind three balls heading for the far wall, and the clock runs out
+    // about when the first one gets there (~4.2 s): run under them, get ahead, shoot.
+    // One shot each (split: 1), and no drops, so no extra time.
+    name: 'Photo Finish',
+    time: 5,
+    start: [40, 80, 120, 160],
+    drops: [],
+    split: 1,
+    balls: [
+      { x: 230, y: 330, size: 2, dir: 1, fast: true },
+      { x: 340, y: 360, size: 2, dir: 1, fast: true },
+      { x: 450, y: 390, size: 2, dir: 1, fast: true },
+    ],
+  },
   { name: 'Point Blank', time: 150, weapon: 'stub', drops: [], start: [200, 760, 160, 800], balls: [{ x: 480, y: 140, size: 5, dir: 1 }] },
   { name: 'Light Show', time: 80, weapon: 'lance', drops: ['lance', 'rocket'], dropRate: 0.25, start: [440, 520, 400, 560],
     balls: [{ x: 240, y: 160, size: 3, dir: 1 }, { x: 720, y: 160, size: 3, dir: -1 }] },
@@ -667,7 +682,7 @@ const floor = (name: string, levels: string[]) => ({
   levels: levels.map((n) => { const L = byName.get(n); if (!L) throw new Error(`no level called ${n}`); return L; }),
 });
 export const FLOORS = [
-  floor('Ground Floor', ['Warm-Up', 'Two-Way Street', 'The Big One', 'Open Sesame', 'Overhang', 'Squeeze', 'Trigger Happy', 'Quickstep']),
+  floor('Ground Floor', ['Warm-Up', 'Two-Way Street', 'The Big One', 'Open Sesame', 'Overhang', 'Squeeze', 'Trigger Happy', 'Photo Finish', 'Quickstep']),
   floor('The Workshop', ['Jailbreak', 'Careful What You Grab', 'Convoy', 'Pressure Cooker', 'Pinball', 'Laser Surgery', 'Rush Hour', 'Last Stand']),
   floor('Portal Gallery', ['Wormhole', 'Return Trip', 'Round Robin', 'Metronome', 'Through Traffic', 'Drum Line']),
   floor('Split Level', ['Triplets', "Three's a Crowd", 'Quadruplets', 'Mixed Bag', 'Split Ends', 'Numbers Game', 'Hall of Mirrors']),

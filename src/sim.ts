@@ -21,6 +21,8 @@ const FAST = 1.6;
 
 export const PW = 26;
 export const PH = 44;
+/** How long the end-of-floor ceremony lasts (ticks). */
+export const FLOOR_UP_TICKS = 330;
 const PSPEED = 250;
 const WIRE_SPEED = 620;
 const BULLET_SPEED = 900;
@@ -199,6 +201,7 @@ export type GameEvent =
   | { t: 'die'; x: number }
   | { t: 'gate' }
   | { t: 'clear' }
+  | { t: 'floor' }
   | { t: 'handoff'; x: number }
   | { t: 'send'; x: number }
   | { t: 'portal'; x: number; y: number }
@@ -355,7 +358,7 @@ function pop(s: State, i: number, L: Level, ev: GameEvent[], by?: Player) {
   if (by) { by.st.pops++; by.st.score += (b.size + 1) * 10; }
   ev.push({ t: 'pop', x: b.x, y: b.y, size: b.size });
   if (L.ceiling) s.ceilY = Math.max(0, s.ceilY - L.ceiling.lift);
-  if (b.size > 0) {
+  if (b.size > 0 && b.split !== 1) { // split: 1 = pops clean, no children
     // Halves kick upward out of the pop. Hit a big ball at the top of its arc and the
     // halves fly high enough to burst on a spiked roof.
     const cs = b.size - 1, off = RADII[cs] * 0.6, kick = -(330 + 40 * cs);
@@ -811,6 +814,8 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
   if (s.balls.length === 0 && (!revive || standing.length === s.players.length)) {
     s.phase = 'clear';
     s.phaseT = 120;
+    // the last level of a floor: a short ceremony before the next one
+    if (L.floor && levels[s.level + 1]?.floor !== L.floor) { s.phaseT = FLOOR_UP_TICKS; ev.push({ t: 'floor' }); }
     s.score += Math.floor(s.timeLeft / 60) * 10;
     s.hist.push([s.level, s.lt, 1, s.lost]);
     ev.push({ t: 'clear' });

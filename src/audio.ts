@@ -39,6 +39,7 @@ export function playEvents(ev: GameEvent[]) {
       case 'haste': blip(1200, 0.15, 'sawtooth', 0.04, 800); break;
       case 'gate': blip(140, 0.3, 'square', 0.06, 200); break;
       case 'clear': blip(523, 0.12, 'sine', 0.09); setTimeout(() => blip(784, 0.25, 'sine', 0.09), 120); break;
+      case 'floor': [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, i === 3 ? 0.5 : 0.14, 'triangle', 0.08), 900 + i * 130)); break;
       case 'start': blip(440, 0.08, 'sine', 0.05); break;
     }
   }

@@ -36,11 +36,11 @@ restarts; the level restarts once everyone is down. Single-player games are alwa
 
 ## The Tower
 
-All 56 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each floor opens on a new idea:
+All 57 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each floor opens on a new idea:
 
 | Floor | Name | Levels |
 |---|---|---|
-| 1 | Ground Floor | 8: the basics |
+| 1 | Ground Floor | 9: the basics, then Photo Finish (outrun three balls to the far wall) |
 | 2 | The Workshop | 8: gates, drops, a descending roof |
 | 3 | Portal Gallery | 6: portals, balls that bounce on the spot |
 | 4 | Split Level | 7: balls that split into 3 and 4 (the number on a ball is how many pieces) |
@@ -52,7 +52,8 @@ All 56 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each f
 
 - A run starts at the first level of any unlocked floor with 3 lives each. Game over means starting that floor again.
 - Reaching a new floor unlocks it as a starting point and tops everyone's lives back up to 3.
-- Progress is one number in the browser's local storage (`splitstorm.tower.v1`): the highest level reached. Solo and online play share it.
+- Progress is kept in the browser's local storage (`splitstorm.tower.v2`) as the name of the highest level reached, so adding levels never moves anyone's place (an old `v1` save, a level number, is converted once). Solo and online play share it.
+- Finishing a floor plays a short ceremony (about 5 s, no choices): the floor fills gold, the next one unlocks and its name is revealed, with that floor's time and falls for the run.
 - The map shows names only for floors and levels already seen. A seen level can be picked directly for practice; practice runs save nothing.
 - Online, the host can start no higher than the lowest floor anyone in the room has reached. Everyone playing saves what the run reaches.
 - The game deliberately explains little. Level hints show only on the pause screen.
@@ -150,6 +151,8 @@ Ideas not yet tried:
 - **Lobby room**: refuse or warn when one player's ping is far worse than everyone else's.
 
 ## Level balance
+
+> **Paused.** The human-like balance bot hasn't matched how real runs of the tower floors go, so levels are balanced by playing them (and by `npm run report` once real stats come in). Don't tune levels with `npm run balance` unless that's explicitly asked for. The smoke test (every level possible, deterministic, nobody hit at the start) still runs as before.
 
 ```bash
 npm run balance -- tower       # add attempts per level (32); without a set id it also runs the three original sets

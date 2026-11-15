@@ -1,4 +1,5 @@
-import { H, PH, PW, RADII, W, hasSpikes, levelAt, stopY } from './sim';
+import { FLOOR_UP_TICKS, H, PH, PW, RADII, W, hasSpikes, levelAt, stopY } from './sim';
+import { FLOORS, FLOOR_START } from './levels';
 import type { GameEvent, Level, PickupKind, State, Mode } from './sim';
 import { LANCE_LEN, MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, SWORD_REACH, TETHER, VERSUS_WINS, roped } from './sim';
 
@@ -446,7 +447,8 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
     if (s.mode !== 'versus' && L.floor && / 1\//.test(where)) text(ctx, `FLOOR ${L.floor}`, W / 2, 140, 18, '#ffd43b');
     text(ctx, L.name, W / 2, 190, 40);
     if (touch) text(ctx, 'Left thumb: slide to move      Right thumb: hold to fire', W / 2, 320, 15, '#8a90c7', 'center', 400);
-  } else if (s.phase === 'clear') text(ctx, 'CLEAR!', W / 2, 200, 48, '#8ce99a');
+  } else if (s.phase === 'clear' && L.floor && s.phaseT <= FLOOR_UP_TICKS && isFloorEnd(L)) drawFloorUp(ctx, s, L.floor - 1);
+  else if (s.phase === 'clear') text(ctx, 'CLEAR!', W / 2, 200, 48, '#8ce99a');
   else if (s.phase === 'over') overlay(ctx, 'GAME OVER', '#ff6b6b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
   else if (s.phase === 'won') overlay(ctx, 'YOU WIN', '#ffd43b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
   if (s.paused) {
@@ -794,6 +796,100 @@ function drawRoom(ctx: CanvasRenderingContext2D, v: LobbyView, dots: string) {
   } else text(ctx, foot, W / 2, H + 44, 13, '#8a90c7', 'center', 400);
 }
 
+const isFloorEnd = (L: Level) => { const f = FLOORS[L.floor! - 1]; return !!f && f.levels[f.levels.length - 1].name === L.name; };
+const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : 1 - (1 - x) ** 3);
+const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+/** End of a floor: the floor's slab fills with gold, the one above unlocks, confetti. Plays itself out; no choices. */
+function drawFloorUp(ctx: CanvasRenderingContext2D, s: State, f: number) {
+  const T = (FLOOR_UP_TICKS - s.phaseT) / 60; // seconds in
+  const out = clamp01((s.phaseT - 0) / 25); // fade out over the last moments
+  ctx.save();
+  ctx.globalAlpha = Math.min(clamp01(T / 0.35), out);
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, W, H);
+
+  // confetti in the ball colours, falling from above
+  for (let i = 0; i < 70; i++) {
+    const r1 = Math.sin(i * 12.9898) * 43758.5453, r = r1 - Math.floor(r1);
+    const r2 = Math.sin(i * 78.233) * 12345.678, q = r2 - Math.floor(r2);
+    const r3 = Math.sin(i * 39.425) * 9876.54, z = r3 - Math.floor(r3);
+    const t = T - 0.5;
+    if (t < 0) continue;
+    const x = r * W + Math.sin(t * 3 + i) * 18, y = -10 - z * 260 + t * (90 + q * 120);
+    if (y > H) continue;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(t * (2 + q * 4) + i);
+    ctx.fillStyle = BALL_COL[i % BALL_COL.length];
+    ctx.fillRect(-4, -2, 8, 4);
+    ctx.restore();
+  }
+
+  const floor = FLOORS[f], next = FLOORS[f + 1];
+  const head = ease((T - 0.2) / 0.5);
+  ctx.globalAlpha *= head;
+  text(ctx, `FLOOR ${f + 1}`, W / 2, 62 - (1 - head) * 10, 15, '#ffa94d');
+  text(ctx, floor.name.toUpperCase(), W / 2, 104 - (1 - head) * 10, 42, '#fff');
+  ctx.globalAlpha /= head || 1;
+
+  // the run's numbers for this floor
+  const lo = FLOOR_START[f], hi = lo + floor.levels.length;
+  let ticks = 0, falls = 0;
+  for (const [lv, lt, ok] of s.hist) if (lv >= lo && lv < hi) { ticks += lt; if (!ok) falls++; }
+  const secs = Math.round(ticks / 60);
+  const stats = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}   ·   ${falls === 0 ? 'no falls' : falls === 1 ? '1 fall' : `${falls} falls`}`;
+  ctx.globalAlpha *= clamp01((T - 0.7) / 0.4);
+  text(ctx, stats, W / 2, 142, 15, '#cfd4ff', 'center', 400);
+  ctx.globalAlpha = Math.min(clamp01(T / 0.35), out);
+
+  // three slabs: the floor below (dim), this floor (fills gold), the one above (unlocks)
+  const sw = (k: number) => 440 * (1 - k * 0.04);
+  const slab = (k: number, y: number, fill: number, label: string, locked: boolean, glow: number) => {
+    const w = sw(k), x = W / 2 - w / 2, h = 46;
+    ctx.fillStyle = locked ? '#0b0c18' : '#1b1e3d';
+    ctx.fillRect(x, y, w, h);
+    if (fill > 0) { ctx.fillStyle = '#ffd43b'; ctx.globalAlpha *= 0.9; ctx.fillRect(x, y, w * fill, h); ctx.globalAlpha /= 0.9; }
+    if (glow > 0) { ctx.shadowColor = '#ffd43b'; ctx.shadowBlur = 24 * glow; }
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = glow > 0 ? '#ffd43b' : locked ? '#1e2140' : '#7d86d6';
+    ctx.strokeRect(x, y, w, h);
+    ctx.shadowBlur = 0;
+    const col = fill >= 1 ? '#1a1200' : locked ? '#5b6090' : '#e8eaf6';
+    text(ctx, String(k + 1), x + 18, y + h / 2 + 1, 22, col, 'left');
+    text(ctx, label, x + 52, y + h / 2 + 1, 16, col, 'left', 600);
+    return { x, w, h };
+  };
+  const yThis = 300, yUp = yThis - 56, yDown = yThis + 56;
+  if (f > 0) { ctx.globalAlpha *= 0.45; slab(f - 1, yDown, 1, FLOORS[f - 1].name, false, 0); ctx.globalAlpha /= 0.45; }
+  slab(f, yThis, ease((T - 0.5) / 0.8), floor.name, false, 0);
+  if (next) {
+    const open = (T - 1.6) / 0.35; // padlock shakes, then springs open
+    const reveal = clamp01((T - 2.0) / 0.6);
+    const shown = next.name.slice(0, Math.round(next.name.length * reveal));
+    const r = slab(f + 1, yUp, 0, reveal > 0 ? shown : '? ? ?', reveal <= 0, reveal > 0 ? 1 - clamp01((T - 3.2) / 1.2) : 0);
+    if (open < 1.2) {
+      const lx = r.x + r.w - 26, ly = yUp + r.h / 2;
+      const shake = open < 0 && T > 1.2 ? Math.sin(T * 60) * 2 : 0;
+      ctx.globalAlpha *= 1 - clamp01((open - 0.6) / 0.6);
+      ctx.strokeStyle = open > 0 ? '#ffd43b' : '#5b6090';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(lx - 7 + shake, ly - 1 - (open > 0 ? open * 10 : 0), 14, 10);
+      ctx.beginPath();
+      ctx.arc(lx + shake + (open > 0 ? 6 : 0), ly - 1 - (open > 0 ? open * 10 : 0) - (open > 0 ? 3 : 0), 4.5, Math.PI, 0);
+      ctx.stroke();
+      ctx.globalAlpha = Math.min(clamp01(T / 0.35), out);
+    }
+  } else {
+    // the top of the tower
+    const c = ease((T - 1.6) / 0.6);
+    ctx.globalAlpha *= c;
+    text(ctx, 'THE TOP', W / 2, yUp + 20, 28, '#ffd43b');
+    ctx.globalAlpha /= c || 1;
+  }
+  ctx.restore();
+}
+
 /** Gun bearer (a harpoon held up, gold) or VIP (a crown) marker drawn over a player. */
 function drawRole(ctx: CanvasRenderingContext2D, role: 'gun' | 'vip' | '', x: number, y: number, tick: number, scale = 1) {
   if (!role) return;
@@ -824,7 +920,17 @@ function drawRole(ctx: CanvasRenderingContext2D, role: 'gun' | 'vip' | '', x: nu
   ctx.restore();
 }
 
-export interface ResultsView { s: State; you: number; levels: Level[]; online: boolean; t: number }
+export interface ResultsView { s: State; you: number; levels: Level[]; online: boolean; t: number;
+  /** Which award's (?) is being hovered or was tapped, or -1. */
+  help: number }
+
+/** Where the award headings sit, for hovering/tapping their (?). */
+export const AWARD_UI = { y: 372, gap: 280, halfW: 110 };
+const AWARD_HELP = [
+  'Time spent with a ball within 16 px of you without being hit. Most wins.',
+  'The nearest a ball came to you without hitting you, in pixels. Smallest wins.',
+  'Balls popped per shot fired. Needs 10 shots or more to count.',
+];
 
 /** End-of-game stats: one row per player, best in each column picked out. */
 export function drawResults(ctx: CanvasRenderingContext2D, v: ResultsView) {
@@ -879,8 +985,14 @@ export function drawResults(ctx: CanvasRenderingContext2D, v: ResultsView) {
     { h: 'Sharpshooter', get: (i) => acc(i), show: (x) => (x < 0 ? '-' : `${Math.round(x * 100)}%`) },
   ];
   awards.forEach((a, k) => {
-    const x = W / 2 + (k - 1) * 280;
-    text(ctx, a.h.toUpperCase(), x, 372, 12, '#8a90c7');
+    const x = W / 2 + (k - 1) * AWARD_UI.gap, Y = AWARD_UI.y;
+    text(ctx, a.h.toUpperCase(), x - 9, Y, 12, '#8a90c7');
+    ctx.font = '700 12px ui-monospace, Menlo, Consolas, monospace';
+    const qx = x - 9 + ctx.measureText(a.h.toUpperCase()).width / 2 + 12;
+    ctx.strokeStyle = v.help === k ? '#ffd43b' : '#5b6090';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(qx, Y, 7, 0, Math.PI * 2); ctx.stroke();
+    text(ctx, '?', qx, Y + 1, 10, v.help === k ? '#ffd43b' : '#8a90c7');
     const order = P.map((_, i) => i).sort((i, j) => (a.low ? a.get(i) - a.get(j) : a.get(j) - a.get(i)) || i - j);
     order.forEach((i, r) => {
       const y = 394 + r * 20;
@@ -888,5 +1000,15 @@ export function drawResults(ctx: CanvasRenderingContext2D, v: ResultsView) {
       text(ctx, a.show(a.get(i)), x + 8, y, r === 0 ? 16 : 14, r === 0 ? '#fff' : '#cfd4ff', 'left', r === 0 ? 700 : 400);
     });
   });
+  if (v.help >= 0) {
+    const lines = wrap(ctx, AWARD_HELP[v.help], 13, 260);
+    const bw = 284, bh = 18 + lines.length * 18, bx = Math.max(8, Math.min(W - bw - 8, W / 2 + (v.help - 1) * AWARD_UI.gap - bw / 2)), by = AWARD_UI.y - 16 - bh;
+    ctx.fillStyle = '#1b1e3d';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = '#7d86d6';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+    lines.forEach((l, i) => text(ctx, l, bx + 12, by + 18 + i * 18, 13, '#e8eaf6', 'left', 400));
+  }
   text(ctx, touch ? 'TAP TO CONTINUE' : `Enter: back to the ${v.online ? 'lobby' : 'menu'}`, W / 2, H + 20, touch ? 22 : 16, '#8ce99a');
 }

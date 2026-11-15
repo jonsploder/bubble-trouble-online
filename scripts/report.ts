@@ -83,7 +83,9 @@ interface LevelAgg { games: number; attempts: number; clears: number; firstTries
 const agg = new Map<string, LevelAgg>();
 for (const r of recs) {
   const seen = new Set<number>();
-  for (const [level, ticks, result, lost] of r.hist) {
+  for (const [lv, ticks, result, lost] of r.hist) {
+    // v18 put Photo Finish in at tower level 8: older tower records count from the old layout
+    const level = r.set === 'tower' && r.version < 18 && lv >= 7 ? lv + 1 : lv;
     const k = `${r.set}:${level}`;
     let a = agg.get(k);
     if (!a) { a = { games: 0, attempts: 0, clears: 0, firstTries: 0, firstClears: 0, clearTimes: [], lost: 0, quits: 0, solo: [0, 0], group: [0, 0] }; agg.set(k, a); }

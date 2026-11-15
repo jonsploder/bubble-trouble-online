@@ -2,14 +2,14 @@ import { playEvents, unlockAudio } from './audio';
 import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
-import { CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawTower, fxEvents, setTouch } from './render';
+import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawTower, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
 import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 16;
+const VERSION = 18;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
@@ -48,14 +48,20 @@ const menu = { floor: 0, level: 0, gmode: 0, mode: 0, row: 0, t: 0 }; // floor/l
 // ---------------------------------------------------------------- progress
 // One number, kept in this browser: the highest tower level ever reached. A floor is unlocked
 // once its first level has been reached; a level's name shows once the level has been seen.
-const SAVE_KEY = 'splitstorm.tower.v1';
+// Saved as the level's name, so adding levels to the tower doesn't move anyone's place.
+const SAVE_KEY = 'splitstorm.tower.v2';
+/** Before v2 the save was a position in the tower as it was before Photo Finish was added. */
+const OLD_SAVE_KEY = 'splitstorm.tower.v1', V1_TOWER = TOWER.filter((L) => L.name !== 'Photo Finish');
 let reach = 0;
-try { reach = Math.max(0, Math.min(TOWER.length - 1, Math.floor(+(localStorage.getItem(SAVE_KEY) ?? 0)) || 0)); } catch { /* private window: progress lasts for this visit */ }
+try {
+  const name = localStorage.getItem(SAVE_KEY) ?? V1_TOWER[Math.floor(+(localStorage.getItem(OLD_SAVE_KEY) ?? 0)) || 0]?.name;
+  reach = Math.max(0, TOWER.findIndex((L) => L.name === name));
+} catch { /* private window: progress lasts for this visit */ }
 const floorOf = (level: number) => (TOWER[level]?.floor ?? 1) - 1;
 function reached(s: State) {
   if (s.mode === 'versus' || s.level <= reach || s.level >= TOWER.length) return;
   reach = s.level;
-  try { localStorage.setItem(SAVE_KEY, String(reach)); } catch { /* ignore */ }
+  try { localStorage.setItem(SAVE_KEY, TOWER[reach].name); } catch { /* ignore */ }
 }
 /** HUD label: floor, and how far up it. */
 function where(s: State): string {
@@ -231,6 +237,7 @@ function endSession() {
 
 function showResults(s: State, set: number, you: number, online: boolean) {
   results = { s: JSON.parse(JSON.stringify(s)), set, you, online };
+  awardHelp = -1;
   screen = 'results';
   keys.clear();
 }
@@ -482,7 +489,13 @@ function tapUI(x: number, y: number): boolean {
     }
     return true;
   }
-  if (screen === 'results') { closeResults(); return true; }
+  if (screen === 'results') {
+    // tapping an award heading shows how it's worked out; tap anywhere else to carry on
+    const k = awardAt(x, y);
+    if (k >= 0 || awardHelp >= 0) awardHelp = k === awardHelp ? -1 : k;
+    else closeResults();
+    return true;
+  }
   if (screen === 'lobby') {
     if (close) lobbyKey('Escape');
     else if (net.status === 'error') lobbyKey('Enter');
@@ -507,6 +520,19 @@ function tapUI(x: number, y: number): boolean {
   if (close) { gameKey('Escape'); return true; }
   return false;
 }
+
+// Award headings on the results screen: hovering one (or tapping it) explains it.
+let awardHelp = -1;
+function awardAt(x: number, y: number): number {
+  if (Math.abs(y - AWARD_UI.y) > 14) return -1;
+  for (let k = 0; k < 3; k++) if (Math.abs(x - (VIEW_W / 2 + (k - 1) * AWARD_UI.gap)) < AWARD_UI.halfW) return k;
+  return -1;
+}
+canvas.addEventListener('mousemove', (e) => {
+  if (touchMode || screen !== 'results') return;
+  const r = canvas.getBoundingClientRect();
+  awardHelp = awardAt(((e.clientX - r.left) / r.width) * VIEW_W, ((e.clientY - r.top) / r.height) * VIEW_H);
+});
 
 window.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse') return;
@@ -567,7 +593,7 @@ function frame(now: number) {
   if (screen !== 'game') pointers.clear();
   if (screen === 'results' && results) {
     menu.t += dt;
-    drawResults(ctx, { s: results.s, you: results.you, levels: SETS[results.set].levels, online: results.online, t: menu.t });
+    drawResults(ctx, { s: results.s, you: results.you, levels: SETS[results.set].levels, online: results.online, t: menu.t, help: awardHelp });
   } else
   if (screen === 'game' && session) {
     // `rate` nudges our clock toward the other players', and eases off if someone goes quiet
@@ -624,6 +650,7 @@ if (import.meta.env.DEV) {
     set reach(v: number) { reach = v; },
     get screen() { return screen; },
     get session() { return session; },
+    get game() { return game; },
   };
 }
 
