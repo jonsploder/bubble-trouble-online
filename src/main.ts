@@ -51,9 +51,10 @@ const SLOGANS = [
   'Pop responsibly', 'Divide and be conquered', 'Split happens', 'Pop culture', 'Breaking up is easy', 'Have a ball',
   'Ballpark estimate: too many', "You'll bounce back from this", 'Burst your bubble', 'Enter the ball of fame', "Pop 'til you drop",
 ];
-// PROVISIONAL music plan until the tracks are chosen: floors take turns with the level
-// tracks, the last level of a floor gets a boss track, and every screen outside a game plays
-// the menu track (so the music slider in Settings can be heard as it moves).
+// PROVISIONAL music plan until the tracks are chosen: each level gets the next level track,
+// the last level of a floor gets a boss track instead, and every screen outside a game plays
+// the menu track (so the music slider in Settings can be heard as it moves). Retrying a level
+// keeps its track.
 const LEVEL_TRACKS = ['skyline', 'nightshift2', 'hopskip', 'neontide', 'glass', 'backalley', 'circuit', 'updraft', 'sugarrush2', 'paperplanes', 'lowtide', 'sunday', 'nightbus', 'confetti'];
 const BOSS_TRACKS = ['showdown', 'curtain', 'undertow', 'redalert2', 'slowburn', 'meltdown2', 'nowayout'];
 /** Each game starts the rotation somewhere else (from its seed, so online players hear the same), so every track gets heard. */
@@ -64,11 +65,10 @@ function musicFor(): string | null {
   if (screen !== 'game') return 'lobbylights'; // menu, floor picker, lobby, settings, stats, results
   const s = session ? session.predicted : game;
   if (!s || s.phase === 'over' || s.phase === 'won') return null;
-  if (s.mode === 'versus') return 'sugarrush';
   const L = levelAt(s, levels), f = (L.floor ?? 1) - 1;
-  const last = !!L.floor && levels[s.level + 1]?.floor !== L.floor;
+  const last = s.mode !== 'versus' && !!L.floor && levels[s.level + 1]?.floor !== L.floor;
   if (last && s.phase === 'clear') return null; // the floor fanfare plays alone
-  return last ? BOSS_TRACKS[(f + musicShift) % BOSS_TRACKS.length] : LEVEL_TRACKS[(f + musicShift) % LEVEL_TRACKS.length];
+  return last ? BOSS_TRACKS[(f + musicShift) % BOSS_TRACKS.length] : LEVEL_TRACKS[(s.level + musicShift) % LEVEL_TRACKS.length];
 }
 let overT = 0;
 const OVER_SECS = 2.5;
@@ -409,13 +409,13 @@ setInterval(() => {
 
 // ---------------------------------------------------------------- input
 window.addEventListener('keydown', (e) => {
-  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Backspace'].includes(e.code) || (screen === 'game' && isBound(e.code)) || (screen === 'settings' && set.capture)) e.preventDefault();
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Backspace'].includes(e.code) || (screen === 'game' && isBound(e.code)) || (settingsShown() && set.capture)) e.preventDefault();
   unlockAudio();
-  if (screen === 'settings' && e.repeat && set.row <= 1 && !set.capture) { settingsKey(e.code); return; } // hold to slide the volume
+  if (settingsShown() && e.repeat && set.row <= 1 && !set.capture) { settingsKey(e.code); return; } // hold to slide the volume
   if (e.repeat) return;
   keys.add(e.code);
   if (screen === 'menu') menuKey(e.code);
-  else if (screen === 'settings') settingsKey(e.code);
+  else if (settingsShown()) settingsKey(e.code);
   else if (screen === 'stats') {
     if (e.code === 'ArrowDown' || e.code === 'ArrowUp') statsScroll += (e.code === 'ArrowDown' ? 1 : -1) * STATS_UI.rowH;
     else if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'KeyS' || e.code === 'Space') screen = 'menu';
@@ -453,7 +453,7 @@ function menuKey(code: string) {
   if (code === 'ArrowUp') menu.row = (menu.row + 3) % 4;
   if (code === 'ArrowDown') menu.row = (menu.row + 1) % 4;
   if ((code === 'Enter' || code === 'Space') && menu.row >= 2) {
-    if (menu.row === 2) { set.row = 0; set.col = 0; set.capture = false; screen = 'settings'; }
+    if (menu.row === 2) openSettings(false);
     else openStats();
     return;
   }
@@ -472,8 +472,22 @@ function menuKey(code: string) {
 let statsScroll = 0;
 function openStats() { statsScroll = 0; screen = 'stats'; }
 
-/** The settings screen's cursor: row 0 sound effects, 1 music, 2-4 left/right/fire, 5 reset; col = player. */
-const set = { row: 0, col: 0, capture: false };
+/** The settings screen's cursor: row 0 sound effects, 1 music, 2-4 left/right/fire, 5 reset; col = player.
+ *  `inGame`: opened from the pause screen, drawn over the paused game (which keeps running online). */
+const set = { row: 0, col: 0, capture: false, inGame: false };
+const settingsShown = () => screen === 'settings' || (screen === 'game' && set.inGame);
+function openSettings(inGame: boolean) {
+  Object.assign(set, { row: 0, col: 0, capture: false, inGame });
+  if (!inGame) screen = 'settings';
+}
+function closeSettings() {
+  set.capture = false;
+  if (set.inGame) set.inGame = false; // back to the pause screen
+  else screen = 'menu';
+}
+function drawSettingsNow() {
+  drawSettings(ctx, { t: menu.t, vol: settings.vol, music: settings.music, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
+}
 
 function settingsKey(code: string) {
   if (set.capture) {
@@ -481,7 +495,7 @@ function settingsKey(code: string) {
     else if (!RESERVED.includes(code)) { bind(set.col, ACTIONS[set.row - 2], code); set.capture = false; }
     return;
   }
-  if (code === 'Escape') { screen = 'menu'; return; }
+  if (code === 'Escape') { closeSettings(); return; }
   if (code === 'ArrowUp') set.row = (set.row + 5) % 6;
   if (code === 'ArrowDown') set.row = (set.row + 1) % 6;
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
@@ -570,6 +584,7 @@ function gameKey(code: string) {
     if (code === 'Escape') quitGame(); // frozen waiting for someone: pausing can't get through
   } else if (s.paused) {
     if (code === 'Escape' || code === 'Enter' || code === 'KeyP') pausePulse = true;
+    else if (code === 'KeyS') openSettings(true);
     else if (code === 'KeyQ') quitGame();
   } else if (code === 'Escape' || code === 'KeyP') pausePulse = true;
 }
@@ -618,7 +633,7 @@ const volAt = (x: number) => Math.round(((x - SET_UI.sliderX) / SET_UI.sliderW) 
 function dragStart(id: number, x: number, y: number): boolean {
   if (portrait()) return false;
   const U = SET_UI, c = CLOSE_BTN;
-  if (screen === 'settings' && x > U.sliderX - 30 && x < U.sliderX + U.sliderW + 40 && (Math.abs(y - U.volY) < 22 || Math.abs(y - U.musicY) < 22)) {
+  if (settingsShown() && x > U.sliderX - 30 && x < U.sliderX + U.sliderW + 40 && (Math.abs(y - U.volY) < 22 || Math.abs(y - U.musicY) < 22)) {
     const music = Math.abs(y - U.musicY) < 22;
     drag = { id, kind: music ? 'music' : 'vol', y, s: 0 };
     set.row = music ? 1 : 0;
@@ -647,8 +662,8 @@ function tapUI(x: number, y: number): boolean {
   const near = (yy: number, r = 18) => Math.abs(y - yy) < r;
   const dir = x > VIEW_W / 2 ? 'ArrowRight' : 'ArrowLeft';
   if (screen === 'stats') { if (close) screen = 'menu'; return true; }
-  if (screen === 'settings') {
-    if (close) { set.capture = false; screen = 'menu'; }
+  if (settingsShown()) {
+    if (close) closeSettings();
     else settingsTap(x, y);
     return true;
   }
@@ -703,7 +718,7 @@ function tapUI(x: number, y: number): boolean {
   }
   const s = session ? session.predicted : game;
   if (s && (s.phase === 'over' || s.phase === 'won')) { gameKey('Enter'); return true; }
-  if (s && s.paused) { gameKey(x < VIEW_W / 2 ? 'Enter' : 'KeyQ'); return true; }
+  if (s && s.paused) { gameKey(x < VIEW_W * 0.36 ? 'Enter' : x < VIEW_W * 0.64 ? 'KeyS' : 'KeyQ'); return true; }
   if (close) { gameKey('Escape'); return true; }
   return false;
 }
@@ -735,7 +750,7 @@ window.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     unlockAudio();
     if (dragStart(e.pointerId, x, y)) { e.preventDefault(); return; }
-    if (screen === 'settings') settingsTap(x, y);
+    if (settingsShown()) settingsTap(x, y);
     return;
   }
   e.preventDefault();
@@ -872,7 +887,7 @@ function frame(now: number) {
     });
   } else if (screen === 'settings') {
     menu.t += dt;
-    drawSettings(ctx, { t: menu.t, vol: settings.vol, music: settings.music, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
+    drawSettingsNow();
   } else if (screen === 'stats') {
     menu.t += dt;
     statsScroll = drawStats(ctx, { life, floors: FLOORS.map((f, i) => (i <= floorOf(reach) ? f.name : '')), scroll: statsScroll });
@@ -883,6 +898,12 @@ function frame(now: number) {
     menu.t += dt;
     if (lastScreen && lastScreen !== 'menu') nextSlogan();
     drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode], playSecs: life.playSecs, controls: [controlsLine(0), controlsLine(1)], slogan: SLOGANS[slogan] });
+  }
+  // settings opened from the pause screen: drawn over the game; closes if someone else unpauses
+  if (set.inGame) {
+    const g = screen === 'game' ? (session ? session.predicted : game) : null;
+    if (!g || !g.paused) set.inGame = false;
+    else { menu.t += dt; drawSettingsNow(); }
   }
   setMusic(musicFor());
   // a finished game shows GAME OVER / YOU WIN for a moment, then the results (Enter or a tap skips ahead)

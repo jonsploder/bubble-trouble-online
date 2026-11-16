@@ -486,9 +486,10 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
     });
     text(ctx, L.name, W / 2, 322, 15, '#cfd4ff', 'center', 400);
     if (touch) {
-      text(ctx, 'RESUME', W * 0.3, 418, 28, '#8ce99a');
-      text(ctx, 'QUIT', W * 0.7, 418, 28, '#ff8787');
-    } else text(ctx, `Enter: resume      Q: ${quit}`, W / 2, 418, 16, '#cfd4ff', 'center', 400);
+      text(ctx, 'RESUME', W * 0.2, 418, 26, '#8ce99a');
+      text(ctx, 'SETTINGS', W * 0.5, 418, 26, '#cfd4ff');
+      text(ctx, 'QUIT', W * 0.8, 418, 26, '#ff8787');
+    } else text(ctx, `Enter: resume      S: settings      Q: ${quit}`, W / 2, 418, 16, '#cfd4ff', 'center', 400);
   }
   if (waiting) overlay(ctx, 'WAITING', '#fff', touch ? 'for the other player...' : 'for the other player...   Esc: lobby');
   closeButton(ctx);

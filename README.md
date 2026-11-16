@@ -62,7 +62,7 @@ All 57 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each f
 - The map shows names only for floors and levels already seen. A seen level can be picked directly for practice; practice runs save nothing.
 - Online, the host can start no higher than the lowest floor anyone in the room has reached. Everyone playing saves what the run reaches.
 - The game deliberately explains little. Level hints show only on the pause screen.
-- Music (`src/music.ts`): each game starts the track rotation at a different point, one track per floor and a boss track on a floor's last level, with a fade between tracks. While testing, the top-left corner names the track playing and, online, shows the live ping to each other player.
+- Music (`src/music.ts`): each level plays the next track in the rotation (starting at a different point each game), a floor's last level plays a boss track, and tracks fade into each other. Retrying a level keeps its track. While testing, the top-left corner names the track playing and, online, shows the live ping to each other player.
 
 Weapons beyond the harpoon, twin harpoon, sticky vine, pulse gun and beam:
 
