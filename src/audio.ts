@@ -1,23 +1,37 @@
 import type { GameEvent } from './sim';
+import { VOL_MAX, settings } from './settings';
 
 let ac: AudioContext | null = null;
+let master: GainNode | null = null;
 
 export function unlockAudio() {
   try {
-    if (!ac) ac = new AudioContext();
-    else if (ac.state === 'suspended') void ac.resume();
+    if (!ac) {
+      ac = new AudioContext();
+      master = ac.createGain();
+      master.connect(ac.destination);
+      applyVolume();
+    } else if (ac.state === 'suspended') void ac.resume();
   } catch { /* no audio available */ }
 }
 
+/** Set the sound effects volume from the settings (a squared curve, so the low end of the slider is usable). */
+export function applyVolume() {
+  if (master) master.gain.value = (settings.vol / VOL_MAX) ** 2;
+}
+
+/** A short sound to hear the volume by. */
+export function volumeBlip() { blip(660, 0.1, 'triangle', 0.09, -120); }
+
 function blip(freq: number, dur: number, type: OscillatorType = 'square', vol = 0.05, slide = 0) {
-  if (!ac) return;
+  if (!ac || !master || settings.vol === 0) return;
   const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
   o.type = type;
   o.frequency.setValueAtTime(freq, t);
   if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
   g.gain.setValueAtTime(vol, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(ac.destination);
+  o.connect(g).connect(master);
   o.start(t);
   o.stop(t + dur);
 }

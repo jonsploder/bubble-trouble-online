@@ -606,33 +606,95 @@ function backdrop(ctx: CanvasRenderingContext2D, t: number) {
   ctx.globalAlpha = 1;
 }
 
-/** Vertical positions of the menu's rows and play button (view coordinates). */
-export const MENU_Y = { rows: 250, gap: 44, go: 420 };
+/** Menu layout (view coordinates): the four rows (Mode, Play, Settings, Stats), the play line, and the selector columns. */
+export const MENU_Y = { rows: [222, 262, 334, 372], hint: 292, go: 430, played: 466, label: 330, lt: 370, gt: 790 };
 
 export interface MenuView {
   /** The chosen mode needs more players than the chosen way of playing gives. */
   blocked: boolean;
   row: number; t: number; gameMode: { id: Mode; name: string; hint: string }; playName: string;
   /** Lifetime seconds played, shown under the menu. */
-  playSecs: number }
+  playSecs: number;
+  /** Each keyboard player's keys, for the footer. */
+  controls: string[];
+  slogan: string }
 
 export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   backdrop(ctx, m.t);
+  const Y = MENU_Y;
   text(ctx, 'OVERPOPPED', W / 2, 110, 72, '#fff');
-  text(ctx, 'they multiply. you don\'t.', W / 2, 162, 16, '#cfd4ff', 'center', 400);
-  const rows = [`Mode:     <  ${m.gameMode.name}  >`, `Play:     <  ${m.playName}  >`];
-  rows.forEach((r, i) => text(ctx, r, W / 2, MENU_Y.rows + i * MENU_Y.gap, 22, m.row === i ? '#ffd43b' : '#8a90c7'));
+  text(ctx, m.slogan, W / 2, 162, 16, '#cfd4ff', 'center', 400);
+  // Mode and Play: labels right-aligned in one column, values centred between fixed arrows
+  ([['Mode', m.gameMode.name], ['Play', m.playName]] as const).forEach(([k, v], i) => {
+    const y = Y.rows[i], on = m.row === i, col = on ? '#ffd43b' : '#8a90c7';
+    text(ctx, k, Y.label, y, 22, on ? '#ffd43b' : '#5b6090', 'right');
+    text(ctx, '<', Y.lt, y, 22, col);
+    text(ctx, v, (Y.lt + Y.gt) / 2, y, 22, col);
+    text(ctx, '>', Y.gt, y, 22, col);
+  });
   const hint = m.gameMode.id === 'classic' ? '' : m.gameMode.hint;
-  if (hint) text(ctx, hint, W / 2, MENU_Y.rows + 2 * MENU_Y.gap, 13, '#8a90c7', 'center', 400);
-  if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players`, W / 2, MENU_Y.go, 18, '#ff8787');
-  else text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, MENU_Y.go, touch ? 26 : 22, '#8ce99a');
-  const played = m.playSecs >= 60 ? `${longTime(m.playSecs)} played   ·   ` : '';
-  text(ctx, played + (touch ? 'Tap here for stats' : 'S: stats'), W / 2, STATS_UI.menuY, 14, '#cfd4ff', 'center', 400);
-  text(ctx, touch ? 'Tap a row to change it' : 'P1: arrows + Space      P2: A / D + W      P: pause   Esc: menu', W / 2, H + 30, 14, '#8a90c7', 'center', 400);
+  if (hint) text(ctx, hint, W / 2, Y.hint, 13, '#8a90c7', 'center', 400);
+  ['Settings', 'Stats'].forEach((k, i) => text(ctx, k, W / 2, Y.rows[2 + i], 20, m.row === 2 + i ? '#ffd43b' : '#8a90c7'));
+  if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players`, W / 2, Y.go, 18, '#ff8787');
+  else text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, Y.go, touch ? 26 : 22, '#8ce99a');
+  if (m.playSecs >= 60) text(ctx, `${longTime(m.playSecs)} played`, W / 2, Y.played, 13, '#5b6090', 'center', 400);
+  text(ctx, touch ? 'Tap a row to change it' : `P1: ${m.controls[0]}      P2: ${m.controls[1]}      P: pause   Esc: menu`, W / 2, H + 30, 14, '#8a90c7', 'center', 400);
 }
 
-/** Where the stats link sits on the menu. */
-export const STATS_UI = { menuY: 462 };
+/** Settings layout (view coordinates), shared with the touch handling. */
+export const SET_UI = { volY: 120, label: 300, sliderX: 340, sliderW: 360, headY: 196, rowY: 240, rowGap: 46, colX: [450, 680], cellW: 190, cellH: 34, resetY: 400 };
+
+export interface SettingsView {
+  t: number;
+  /** 0..volMax */
+  vol: number; volMax: number;
+  /** keys[player][action] as display names, '' for none. */
+  keys: string[][];
+  /** 0 volume, 1-3 left/right/fire, 4 reset. */
+  row: number; col: number;
+  /** Waiting for a key for the selected cell. */
+  capture: boolean;
+}
+
+export function drawSettings(ctx: CanvasRenderingContext2D, v: SettingsView) {
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const U = SET_UI, sel = (r: number) => v.row === r;
+  text(ctx, 'SETTINGS', 40, 50, 30, '#fff', 'left');
+
+  // volume slider
+  text(ctx, 'Sound effects', U.label, U.volY, 18, sel(0) ? '#ffd43b' : '#8a90c7', 'right');
+  const f = v.vol / v.volMax, kx = U.sliderX + f * U.sliderW;
+  ctx.fillStyle = '#2b2f55';
+  ctx.beginPath(); ctx.roundRect(U.sliderX, U.volY - 3, U.sliderW, 6, 3); ctx.fill();
+  ctx.fillStyle = sel(0) ? '#ffd43b' : '#7d86d6';
+  ctx.beginPath(); ctx.roundRect(U.sliderX, U.volY - 3, Math.max(6, f * U.sliderW), 6, 3); ctx.fill();
+  ctx.beginPath(); ctx.arc(kx, U.volY, 11, 0, Math.PI * 2); ctx.fill();
+  text(ctx, v.vol === 0 ? 'Off' : `${Math.round(f * 100)}%`, U.sliderX + U.sliderW + 30, U.volY, 16, '#e8eaf6', 'left');
+
+  // controls
+  ['Player 1', 'Player 2 (same keyboard)'].forEach((k, c) => text(ctx, k, U.colX[c], U.headY, 14, PLAYER_COL[c], 'center', 600));
+  ['Left', 'Right', 'Fire'].forEach((k, a) => {
+    const y = U.rowY + a * U.rowGap;
+    text(ctx, k, U.label, y, 18, sel(a + 1) ? '#ffd43b' : '#8a90c7', 'right');
+    for (let c = 0; c < 2; c++) {
+      const on = sel(a + 1) && v.col === c, x = U.colX[c] - U.cellW / 2;
+      ctx.fillStyle = on ? '#1b1e3d' : '#10122a';
+      ctx.fillRect(x, y - U.cellH / 2, U.cellW, U.cellH);
+      ctx.strokeStyle = on ? '#ffd43b' : '#2b2f55';
+      ctx.lineWidth = on ? 2 : 1;
+      ctx.strokeRect(x, y - U.cellH / 2, U.cellW, U.cellH);
+      if (on && v.capture) {
+        if (Math.floor(v.t * 3) % 2 === 0) text(ctx, 'press a key', U.colX[c], y + 1, 15, '#ffd43b', 'center', 600);
+      } else text(ctx, v.keys[c][a] || '-', U.colX[c], y + 1, 16, v.keys[c][a] ? '#e8eaf6' : '#5b6090', 'center', 600);
+    }
+  });
+  text(ctx, 'Reset controls', W / 2, U.resetY, 16, sel(4) ? '#ffd43b' : '#8a90c7');
+
+  if (touch) closeButton(ctx);
+  else text(ctx, v.capture ? 'Press a key for it   Esc: cancel' : v.row === 0 ? '< >: volume   Esc: back' : 'Enter: change key   Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
+}
 
 export interface StatsView {
   life: Lifetime;
@@ -1003,8 +1065,8 @@ export interface ResultsView { s: State; you: number; levels: Level[]; online: b
 /** Where the award headings sit, for hovering/tapping their (?). */
 export const AWARD_UI = { y: 372, gap: 280, halfW: 110 };
 const AWARD_HELP = [
-  'Time spent with a ball within 16 px of you without being hit. Most wins.',
-  'The nearest a ball came to you without hitting you, in pixels. Smallest wins.',
+  'Time spent with a ball within 16 px of you without being hit.',
+  'The nearest a ball came to you without hitting you, in pixels.',
   'Balls popped per shot fired. Needs 10 shots or more to count.',
 ];
 

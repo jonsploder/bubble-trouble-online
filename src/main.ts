@@ -1,9 +1,10 @@
-import { playEvents, unlockAudio } from './audio';
+import { applyVolume, playEvents, unlockAudio, volumeBlip } from './audio';
+import { ACTIONS, RESERVED, VOL_MAX, bind, controlsLine, isBound, keyName, resetKeys, saveSettings, settings } from './settings';
 import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
 import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveNow, watchGame } from './stats';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
-import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawStats, drawTower, STATS_UI, fxEvents, setTouch } from './render';
+import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawSettings, drawStats, drawTower, SET_UI, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
 import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
@@ -32,7 +33,7 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
 
 // ---------------------------------------------------------------- state
-type Screen = 'menu' | 'tower' | 'lobby' | 'game' | 'results' | 'stats';
+type Screen = 'menu' | 'tower' | 'lobby' | 'game' | 'results' | 'stats' | 'settings';
 let screen: Screen = 'menu';
 let levels: Level[] = TOWER;
 let game: State | null = null; // local play
@@ -44,6 +45,13 @@ let practice = false; // the local game started mid-floor: it saves no progress
 let results: { s: State; set: number; you: number; online: boolean } | null = null;
 let pausePulse = false; // send IN_PAUSE on the next tick
 const keys = new Set<string>();
+// One of these shows under the title, a different one each time the menu comes back.
+const SLOGANS = [
+  'Pop responsibly.', 'Divide and be conquered.', 'Split happens.', 'Pop culture.', 'Breaking up is easy.', 'Have a ball.',
+  'Ballpark estimate: too many.', "You'll bounce back from this.", 'Burst your bubble.', 'Enter the ball of fame.', "Pop 'til you drop.",
+];
+let slogan = Math.floor(Math.random() * SLOGANS.length), lastScreen = '';
+const nextSlogan = () => { slogan = (slogan + 1 + Math.floor(Math.random() * (SLOGANS.length - 1))) % SLOGANS.length; };
 const menu = { floor: 0, level: 0, gmode: 0, mode: 0, row: 0, t: 0 }; // floor/level: the tower pick; gmode: game mode (MODES), mode: how to play (PLAY_MODES)
 
 // ---------------------------------------------------------------- progress
@@ -345,11 +353,13 @@ setInterval(() => {
 
 // ---------------------------------------------------------------- input
 window.addEventListener('keydown', (e) => {
-  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Backspace'].includes(e.code)) e.preventDefault();
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Backspace'].includes(e.code) || (screen === 'game' && isBound(e.code)) || (screen === 'settings' && set.capture)) e.preventDefault();
   unlockAudio();
+  if (screen === 'settings' && e.repeat && set.row === 0) { settingsKey(e.code); return; } // hold to slide the volume
   if (e.repeat) return;
   keys.add(e.code);
   if (screen === 'menu') menuKey(e.code);
+  else if (screen === 'settings') settingsKey(e.code);
   else if (screen === 'stats') { if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'KeyS' || e.code === 'Space') screen = 'menu'; }
   else if (screen === 'tower') towerKey(e.code);
   else if (screen === 'lobby') lobbyKey(e.code);
@@ -373,7 +383,13 @@ function startLocal(level: number) {
 
 function menuKey(code: string) {
   if (code === 'KeyS') { screen = 'stats'; return; }
-  if (code === 'ArrowUp' || code === 'ArrowDown') menu.row = 1 - menu.row;
+  if (code === 'ArrowUp') menu.row = (menu.row + 3) % 4;
+  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 4;
+  if ((code === 'Enter' || code === 'Space') && menu.row >= 2) {
+    if (menu.row === 2) { set.row = 0; set.col = 0; set.capture = false; screen = 'settings'; }
+    else screen = 'stats';
+    return;
+  }
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
   if (d && menu.row === 0) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
   if (d && menu.row === 1) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
@@ -384,6 +400,36 @@ function menuKey(code: string) {
     else if (MODES[menu.gmode].id === 'versus') startLocal(0); // versus makes its own arenas
     else { menu.floor = floorOf(reach); menu.level = 0; screen = 'tower'; }
   }
+}
+
+/** The settings screen's cursor: row 0 volume, 1-3 left/right/fire, 4 reset; col = player. */
+const set = { row: 0, col: 0, capture: false };
+
+function settingsKey(code: string) {
+  if (set.capture) {
+    if (code === 'Escape') set.capture = false;
+    else if (!RESERVED.includes(code)) { bind(set.col, ACTIONS[set.row - 1], code); set.capture = false; }
+    return;
+  }
+  if (code === 'Escape') { screen = 'menu'; return; }
+  if (code === 'ArrowUp') set.row = (set.row + 4) % 5;
+  if (code === 'ArrowDown') set.row = (set.row + 1) % 5;
+  const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
+  if (d && set.row === 0) setVolume(settings.vol + d);
+  else if (d && set.row <= 3) set.col = d > 0 ? 1 : 0;
+  if (code === 'Enter' || code === 'Space') {
+    if (set.row >= 1 && set.row <= 3) set.capture = true;
+    else if (set.row === 4) resetKeys();
+  }
+}
+
+function setVolume(v: number) {
+  v = Math.max(0, Math.min(VOL_MAX, v));
+  if (v === settings.vol) return;
+  settings.vol = v;
+  saveSettings();
+  applyVolume();
+  volumeBlip();
 }
 
 /** The tower as drawn: floors above `top` locked, and only the level names this player has seen. */
@@ -478,10 +524,23 @@ function tapUI(x: number, y: number): boolean {
   const near = (yy: number, r = 18) => Math.abs(y - yy) < r;
   const dir = x > VIEW_W / 2 ? 'ArrowRight' : 'ArrowLeft';
   if (screen === 'stats') { screen = 'menu'; return true; }
+  if (screen === 'settings') {
+    const U = SET_UI;
+    if (close) { set.capture = false; screen = 'menu'; }
+    else if (near(U.volY, 26) && x > U.sliderX - 30 && x < U.sliderX + U.sliderW + 30) { set.row = 0; setVolume(Math.round(((x - U.sliderX) / U.sliderW) * VOL_MAX)); }
+    else if (near(U.resetY, 20)) { set.row = 4; resetKeys(); }
+    else for (let a = 0; a < 3; a++) for (let c = 0; c < 2; c++)
+      if (near(U.rowY + a * U.rowGap, U.cellH / 2 + 4) && Math.abs(x - U.colX[c]) < U.cellW / 2) { set.row = a + 1; set.col = c; set.capture = true; }
+    return true;
+  }
   if (screen === 'menu') {
-    if (near(STATS_UI.menuY, 20)) { screen = 'stats'; return true; }
-    for (let i = 0; i < 2; i++) if (near(MENU_Y.rows + i * MENU_Y.gap, 20)) { menu.row = i; menuKey(dir); }
-    if (near(MENU_Y.go, 30)) menuKey('Enter');
+    const Y = MENU_Y;
+    for (let i = 0; i < 4; i++) if (near(Y.rows[i], i < 2 ? 20 : 17)) {
+      menu.row = i;
+      if (i < 2) menuKey(x > (Y.lt + Y.gt) / 2 ? 'ArrowRight' : 'ArrowLeft');
+      else menuKey('Enter');
+    }
+    if (near(Y.go, 30)) menuKey('Enter');
     return true;
   }
   if (screen === 'tower') {
@@ -581,9 +640,12 @@ function touchBits(): number {
 function readInputs(n: number): number[] {
   const pause = pausePulse ? IN_PAUSE : 0;
   pausePulse = false;
-  const arrows = pause | touchBits() | (keys.has('ArrowLeft') ? IN_LEFT : 0) | (keys.has('ArrowRight') ? IN_RIGHT : 0) | (keys.has('Space') || keys.has('ArrowUp') ? IN_FIRE : 0);
-  const wasd = (keys.has('KeyA') ? IN_LEFT : 0) | (keys.has('KeyD') ? IN_RIGHT : 0) | (keys.has('KeyW') || keys.has('ShiftLeft') ? IN_FIRE : 0);
-  return n === 1 ? [arrows | wasd] : [arrows, wasd];
+  const held = (p: number) => {
+    const k = settings.keys[p], any = (codes: string[]) => codes.some((c) => keys.has(c));
+    return (any(k.left) ? IN_LEFT : 0) | (any(k.right) ? IN_RIGHT : 0) | (any(k.fire) ? IN_FIRE : 0);
+  };
+  const p1 = pause | touchBits() | held(0), p2 = held(1);
+  return n === 1 ? [p1 | p2] : [p1, p2];
 }
 
 // ---------------------------------------------------------------- loop
@@ -656,6 +718,9 @@ function frame(now: number) {
       reached, floors: towerView(reached.length ? Math.min(...reached) : floorOf(reach)),
       modeName: MODES[host ? menu.gmode : net.hostMode]?.name ?? '', modeHint: MODES[host ? menu.gmode : net.hostMode]?.hint ?? '',
     });
+  } else if (screen === 'settings') {
+    menu.t += dt;
+    drawSettings(ctx, { t: menu.t, vol: settings.vol, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
   } else if (screen === 'stats') {
     menu.t += dt;
     drawStats(ctx, { life, floors: FLOORS.map((f, i) => (i <= floorOf(reach) ? f.name : '')) });
@@ -664,8 +729,10 @@ function frame(now: number) {
     drawTower(ctx, { t: menu.t, floor: menu.floor, level: menu.level, floors: towerView(floorOf(reach)) });
   } else {
     menu.t += dt;
-    drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode], playSecs: life.playSecs });
+    if (lastScreen && lastScreen !== 'menu') nextSlogan();
+    drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode], playSecs: life.playSecs, controls: [controlsLine(0), controlsLine(1)], slogan: SLOGANS[slogan] });
   }
+  lastScreen = screen;
   if (portrait()) drawRotate(ctx);
   requestAnimationFrame(frame);
 }
