@@ -438,6 +438,8 @@ const slots = (bar: string) => { const t = bar.trim().split(/\s+/); return Array
 export interface Music {
   /** Start a track (by id) from the top, or stop with null. The same track again carries on. */
   play(id: string | null): void;
+  /** Hold the track where it is (quickly faded out), or carry on from there. */
+  pause(paused: boolean): void;
   readonly playing: string | null;
 }
 
@@ -585,8 +587,9 @@ export function createMusic(ac: AudioContext, speaker: AudioNode): Music {
   let step = 0, next = 0, timer = 0, swap = 0, want: string | null = null;
   const FADE_OUT = 0.7, FADE_IN = 0.25; // seconds
 
+  let held = false;
   function schedule() {
-    if (!cur) return;
+    if (!cur || held) return;
     const { t } = cur, dur = 60 / t.bpm / 4;
     if (next < ac.currentTime) next = ac.currentTime + 0.03; // the tab was asleep: carry on from now
     while (next < ac.currentTime + 0.15) {
@@ -628,6 +631,16 @@ export function createMusic(ac: AudioContext, speaker: AudioNode): Music {
 
   return {
     get playing() { return want; },
+    pause(p) {
+      if (p === held) return;
+      held = p;
+      const now = ac.currentTime;
+      out.gain.cancelScheduledValues(now);
+      out.gain.setValueAtTime(Math.max(0.0001, out.gain.value), now);
+      // notes already queued for the next moment are faded under; on resume, carry on from the same step
+      out.gain.linearRampToValueAtTime(p ? 0.0001 : 1, now + (p ? 0.12 : 0.25));
+      if (!p) { next = now + 0.05; schedule(); }
+    },
     play(id) {
       if (want === id) return;
       want = id;

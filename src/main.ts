@@ -1,4 +1,4 @@
-import { applyVolume, playEvents, setMusic, unlockAudio, volumeBlip } from './audio';
+import { applyVolume, pauseMusic, playEvents, setMusic, unlockAudio, volumeBlip } from './audio';
 import { TRACKS } from './music';
 import { ACTIONS, RESERVED, VOL_MAX, bind, controlsLine, isBound, keyName, resetKeys, saveSettings, settings } from './settings';
 import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
@@ -905,6 +905,9 @@ function frame(now: number) {
     if (!g || !g.paused) set.inGame = false;
     else { menu.t += dt; drawSettingsNow(); }
   }
+  // the pause screen holds the music; Settings opened from it plays it, so the music slider can be heard
+  const live = screen === 'game' ? (session ? session.predicted : game) : null;
+  pauseMusic(!!live?.paused && !set.inGame);
   setMusic(musicFor());
   // a finished game shows GAME OVER / YOU WIN for a moment, then the results (Enter or a tap skips ahead)
   const done = screen === 'game' ? (session ? session.confirmed : game) : null;

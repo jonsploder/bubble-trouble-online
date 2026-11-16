@@ -30,6 +30,9 @@ export function applyVolume() {
   music?.play(settings.music ? wanted : null);
 }
 
+/** Hold the music where it is (the pause screen), or carry on. Safe to call every frame. */
+export function pauseMusic(p: boolean) { music?.pause(p); }
+
 /** Which music track should be playing (a track id), or null for silence. Safe to call every frame. */
 export function setMusic(id: string | null) {
   wanted = id;
