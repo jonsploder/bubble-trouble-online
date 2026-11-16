@@ -124,6 +124,8 @@ export const STUB_REACH = 48;
 export const SWORD_REACH = 46;
 export const LANCE_LEN = 96;
 const DART_V0 = 150, DART_ACC = 1400, LANCE_SPEED = 800;
+/** The rocket's body: half its width, and its length (px). */
+export const ROCKET_HALF = 9, ROCKET_LEN = 26;
 /** Versus: round wins needed to win the game. */
 export const VERSUS_WINS = 3;
 
@@ -505,7 +507,7 @@ function stepShots(s: State, L: Level, ev: GameEvent[]) {
       sh.v -= DART_ACC * DT;
       sh.y += sh.v * DT;
       if (sh.y <= stop) dead = true;
-      y0 = sh.y; y1 = sh.y + 14; pad = 3;
+      y0 = sh.y; y1 = sh.y + ROCKET_LEN; pad = ROCKET_HALF; // three times the old width (pad 3)
     } else if (sh.kind === 'lance') {
       sh.y -= LANCE_SPEED * DT;
       if (sh.y <= stop) dead = true;

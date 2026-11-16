@@ -71,7 +71,7 @@ Weapons beyond the harpoon, twin harpoon, sticky vine, pulse gun and beam:
 | Short harpoon | Reaches only 48 px above your head. |
 | Sword | A swipe 46 px in front of you, at body height. |
 | Floor bolt | One bolt at a time along the floor, the way you face, picking up speed. |
-| Rocket | The same, straight up. Drops in ordinary levels too. |
+| Rocket | The same, straight up, and wide (18 px). Drops in ordinary levels too. |
 | Lance | One thin 96 px bar of light at a time, travelling up. Drops in ordinary levels too. |
 
 On the dev server, `?reach=20` opens the map as if level 20 had been reached, and `?play=tower-17` jumps into a level. Neither saves.

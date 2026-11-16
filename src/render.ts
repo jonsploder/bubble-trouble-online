@@ -3,7 +3,7 @@ import { FLOORS, FLOOR_START } from './levels';
 import { clock, longTime } from './stats';
 import type { Lifetime } from './stats';
 import type { GameEvent, Level, PickupKind, State, Mode } from './sim';
-import { LANCE_LEN, MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, SWORD_REACH, TETHER, VERSUS_WINS, roped } from './sim';
+import { LANCE_LEN, ROCKET_HALF, ROCKET_LEN, MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, SWORD_REACH, TETHER, VERSUS_WINS, roped } from './sim';
 
 export const VIEW_W = W;
 export const VIEW_H = H + 60;
@@ -205,11 +205,20 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
       ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
       ctx.beginPath(); ctx.moveTo(sh.x + d * 8, sh.y); ctx.lineTo(sh.x - d * 5, sh.y - 5); ctx.lineTo(sh.x - d * 5, sh.y + 5); ctx.fill();
     } else if (sh.kind === 'darty') {
-      const tail = Math.min(60, Math.abs(sh.v) * 0.05);
+      const tail = Math.min(60, Math.abs(sh.v) * 0.05), r = ROCKET_HALF, x = sh.x, y = sh.y, end = y + ROCKET_LEN;
+      // exhaust
       ctx.fillStyle = col; ctx.globalAlpha = 0.4;
-      ctx.fillRect(sh.x - 1.5, sh.y + 10, 3, tail);
-      ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.moveTo(sh.x, sh.y); ctx.lineTo(sh.x - 5, sh.y + 13); ctx.lineTo(sh.x + 5, sh.y + 13); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x - r * 0.7, end); ctx.lineTo(x + r * 0.7, end); ctx.lineTo(x, end + tail); ctx.fill();
+      ctx.globalAlpha = 1;
+      // fins
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.moveTo(x - r, end - 10); ctx.lineTo(x - r - 6, end + 2); ctx.lineTo(x - r, end); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + r, end - 10); ctx.lineTo(x + r + 6, end + 2); ctx.lineTo(x + r, end); ctx.fill();
+      // body and nose
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + r, y + 10); ctx.lineTo(x + r, end); ctx.lineTo(x - r, end); ctx.lineTo(x - r, y + 10); ctx.fill();
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(x, y + 15, 3.5, 0, Math.PI * 2); ctx.fill();
     } else if (sh.kind === 'lance') {
       const y1 = Math.min(H, sh.y + LANCE_LEN);
       ctx.fillStyle = col; ctx.globalAlpha = 0.35;
