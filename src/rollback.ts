@@ -44,6 +44,9 @@ export interface InputMsg {
   adv: number; // sender's frame lead over the recipient, as the sender sees it
   have: number[]; // how many inputs the sender holds, per player
   inp: [number, number, number[]][]; // [player, first frame, inputs] the recipient is missing
+  ts?: number; // sender's clock (ms), for measuring ping
+  ets?: number; // the last `ts` the sender got from the recipient...
+  eh?: number; // ...and how long (ms) the sender held it before this packet
   cf: number; // frame of checksum
   ch: number; // checksum of confirmed state at cf
 }
@@ -135,6 +138,10 @@ export class RollbackSession {
   private lastT = 0;
   private lastRx: number[];
   private lastIn = -1;
+  private peerTs: number[];
+  private peerAt: number[];
+  /** Round trip to each other player in ms, smoothed, or -1 before it's known. */
+  ping: number[];
   private lastRate = 100;
 
   constructor(private levels: Level[], private me: number, initial: State, private send: (to: number, m: InputMsg) => void) {
@@ -147,6 +154,9 @@ export class RollbackSession {
     this.offset = new Array<number>(n).fill(0);
     this.heard = new Array<boolean>(n).fill(false);
     this.lastRx = new Array<number>(n).fill(0);
+    this.peerTs = new Array<number>(n).fill(-1);
+    this.peerAt = new Array<number>(n).fill(0);
+    this.ping = new Array<number>(n).fill(-1);
     this.log = { me, players: n, tick: [], in: [], rx: Array.from({ length: n }, () => [] as number[]), stall: [], rb: [], rate: [] };
   }
 
@@ -180,7 +190,7 @@ export class RollbackSession {
         const from = this.theirHave[r][q];
         if (q !== r && this.inputs[q].length > from) inp.push([q, from, this.inputs[q].slice(from, from + 240)]);
       }
-      this.send(r, { t: 'in', n, f: this.frame, adv: this.frame - this.remoteFrame[r], have, inp, cf, ch });
+      this.send(r, { t: 'in', n, f: this.frame, adv: this.frame - this.remoteFrame[r], have, inp, cf, ch, ts: now, ets: this.peerTs[r], eh: now - this.peerAt[r] });
     }
   }
 
@@ -190,6 +200,11 @@ export class RollbackSession {
     (this.log.rx as number[][])[from].push(t - this.lastRx[from], m.n);
     this.lastRx[from] = t;
     this.silence = 0;
+    if (m.ts !== undefined) { this.peerTs[from] = m.ts; this.peerAt[from] = now; }
+    if (m.ets !== undefined && m.ets >= 0 && m.eh !== undefined) {
+      const rtt = now - m.ets - m.eh;
+      if (rtt >= 0 && rtt < 5000) this.ping[from] = this.ping[from] < 0 ? rtt : this.ping[from] * 0.9 + rtt * 0.1;
+    }
     for (const [p, base, arr] of m.inp) {
       if (p === this.me || p < 0 || p >= this.players) continue;
       const guess = this.guess(p);

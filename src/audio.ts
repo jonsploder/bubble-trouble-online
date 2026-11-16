@@ -1,8 +1,13 @@
 import type { GameEvent } from './sim';
 import { VOL_MAX, settings } from './settings';
+import { createMusic } from './music';
+import type { Music } from './music';
 
 let ac: AudioContext | null = null;
 let master: GainNode | null = null;
+let musicGain: GainNode | null = null;
+let music: Music | null = null;
+let wanted: string | null = null;
 
 export function unlockAudio() {
   try {
@@ -10,6 +15,9 @@ export function unlockAudio() {
       ac = new AudioContext();
       master = ac.createGain();
       master.connect(ac.destination);
+      musicGain = ac.createGain();
+      musicGain.connect(ac.destination);
+      music = createMusic(ac, musicGain);
       applyVolume();
     } else if (ac.state === 'suspended') void ac.resume();
   } catch { /* no audio available */ }
@@ -18,6 +26,14 @@ export function unlockAudio() {
 /** Set the sound effects volume from the settings (a squared curve, so the low end of the slider is usable). */
 export function applyVolume() {
   if (master) master.gain.value = (settings.vol / VOL_MAX) ** 2;
+  if (musicGain) musicGain.gain.value = 0.9 * (settings.music / VOL_MAX) ** 2;
+  music?.play(settings.music ? wanted : null);
+}
+
+/** Which music track should be playing (a track id), or null for silence. Safe to call every frame. */
+export function setMusic(id: string | null) {
+  wanted = id;
+  music?.play(settings.music ? id : null);
 }
 
 /** A short sound to hear the volume by. */

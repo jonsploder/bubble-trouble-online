@@ -1,4 +1,5 @@
-import { applyVolume, playEvents, unlockAudio, volumeBlip } from './audio';
+import { applyVolume, playEvents, setMusic, unlockAudio, volumeBlip } from './audio';
+import { TRACKS } from './music';
 import { ACTIONS, RESERVED, VOL_MAX, bind, controlsLine, isBound, keyName, resetKeys, saveSettings, settings } from './settings';
 import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
 import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveNow, watchGame } from './stats';
@@ -11,7 +12,7 @@ import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 18;
+const VERSION = 19;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
@@ -50,6 +51,25 @@ const SLOGANS = [
   'Pop responsibly', 'Divide and be conquered', 'Split happens', 'Pop culture', 'Breaking up is easy', 'Have a ball',
   'Ballpark estimate: too many', "You'll bounce back from this", 'Burst your bubble', 'Enter the ball of fame', "Pop 'til you drop",
 ];
+// PROVISIONAL music plan until the tracks are chosen: floors take turns with the level
+// tracks, the last level of a floor gets a boss track, menus are silent. On the settings
+// screen the music slider plays a track so the volume can be heard.
+const LEVEL_TRACKS = ['skyline', 'nightshift2', 'hopskip', 'neontide', 'glass', 'backalley', 'circuit', 'updraft', 'sugarrush2', 'paperplanes', 'lowtide', 'sunday', 'nightbus', 'confetti'];
+const BOSS_TRACKS = ['showdown', 'curtain', 'undertow', 'redalert2', 'slowburn', 'meltdown2', 'nowayout'];
+/** Each game starts the rotation somewhere else (from its seed, so online players hear the same), so every track gets heard. */
+let musicShift = 0;
+/** The corner line naming the track, while music is on. */
+const nowPlaying = () => { const t = settings.music ? TRACKS.find((x) => x.id === musicFor()) : null; return t ? [`♪ ${t.name}`] : []; };
+function musicFor(): string | null {
+  if (screen === 'settings') return set.row === 1 ? LEVEL_TRACKS[0] : null;
+  const s = screen === 'game' ? (session ? session.predicted : game) : null;
+  if (!s || s.phase === 'over' || s.phase === 'won') return null;
+  if (s.mode === 'versus') return 'sugarrush';
+  const L = levelAt(s, levels), f = (L.floor ?? 1) - 1;
+  const last = !!L.floor && levels[s.level + 1]?.floor !== L.floor;
+  if (last && s.phase === 'clear') return null; // the floor fanfare plays alone
+  return last ? BOSS_TRACKS[(f + musicShift) % BOSS_TRACKS.length] : LEVEL_TRACKS[(f + musicShift) % LEVEL_TRACKS.length];
+}
 let overT = 0;
 const OVER_SECS = 2.5;
 let slogan = Math.floor(Math.random() * SLOGANS.length), lastScreen = '';
@@ -186,6 +206,7 @@ function beginSession(m: StartMsg) {
   const me = m.seats.indexOf(net.seat);
   if (!room || me < 0 || session) return;
   levels = SETS[m.set].levels;
+  musicShift = m.seed % 97;
   net.lastGid = m.gid;
   net.seats = m.seats;
   net.me = me;
@@ -390,7 +411,7 @@ setInterval(() => {
 window.addEventListener('keydown', (e) => {
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Backspace'].includes(e.code) || (screen === 'game' && isBound(e.code)) || (screen === 'settings' && set.capture)) e.preventDefault();
   unlockAudio();
-  if (screen === 'settings' && e.repeat && set.row === 0) { settingsKey(e.code); return; } // hold to slide the volume
+  if (screen === 'settings' && e.repeat && set.row <= 1 && !set.capture) { settingsKey(e.code); return; } // hold to slide the volume
   if (e.repeat) return;
   keys.add(e.code);
   if (screen === 'menu') menuKey(e.code);
@@ -418,6 +439,7 @@ function startLocal(level: number) {
   practice = level !== FLOOR_START[floorOf(level)];
   const seed = (Date.now() & 0x7fffffff) | 1, n = menu.mode + 1;
   game = newGame(levels, n, level, seed, MODES[menu.gmode].id);
+  musicShift = seed % 97;
   rec = { id: newId(), seed, start: level, n: 0, inp: Array.from({ length: n }, () => []), last: new Array<number>(n).fill(0) };
   gameStarted(false);
   acc = 0;
@@ -450,25 +472,34 @@ function menuKey(code: string) {
 let statsScroll = 0;
 function openStats() { statsScroll = 0; screen = 'stats'; }
 
-/** The settings screen's cursor: row 0 volume, 1-3 left/right/fire, 4 reset; col = player. */
+/** The settings screen's cursor: row 0 sound effects, 1 music, 2-4 left/right/fire, 5 reset; col = player. */
 const set = { row: 0, col: 0, capture: false };
 
 function settingsKey(code: string) {
   if (set.capture) {
     if (code === 'Escape') set.capture = false;
-    else if (!RESERVED.includes(code)) { bind(set.col, ACTIONS[set.row - 1], code); set.capture = false; }
+    else if (!RESERVED.includes(code)) { bind(set.col, ACTIONS[set.row - 2], code); set.capture = false; }
     return;
   }
   if (code === 'Escape') { screen = 'menu'; return; }
-  if (code === 'ArrowUp') set.row = (set.row + 4) % 5;
-  if (code === 'ArrowDown') set.row = (set.row + 1) % 5;
+  if (code === 'ArrowUp') set.row = (set.row + 5) % 6;
+  if (code === 'ArrowDown') set.row = (set.row + 1) % 6;
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
   if (d && set.row === 0) setVolume(settings.vol + d);
-  else if (d && set.row <= 3) set.col = d > 0 ? 1 : 0;
+  else if (d && set.row === 1) setMusicVolume(settings.music + d);
+  else if (d && set.row <= 4) set.col = d > 0 ? 1 : 0;
   if (code === 'Enter' || code === 'Space') {
-    if (set.row >= 1 && set.row <= 3) set.capture = true;
-    else if (set.row === 4) resetKeys();
+    if (set.row >= 2 && set.row <= 4) set.capture = true;
+    else if (set.row === 5) resetKeys();
   }
+}
+
+function setMusicVolume(v: number) {
+  v = Math.max(0, Math.min(VOL_MAX, v));
+  if (v === settings.music) return;
+  settings.music = v;
+  saveSettings();
+  applyVolume();
 }
 
 function setVolume(v: number) {
@@ -573,25 +604,26 @@ function shareInvite() {
 /** A tap or click on the settings screen: a key box starts listening for a key, or Reset. (The slider is dragged: see `dragStart`.) */
 function settingsTap(x: number, y: number) {
   const U = SET_UI;
-  if (Math.abs(y - U.resetY) < 20 && Math.abs(x - W_MID) < 110) { set.row = 4; resetKeys(); return; }
+  if (Math.abs(y - U.resetY) < 20 && Math.abs(x - W_MID) < 110) { set.row = 5; resetKeys(); return; }
   for (let a = 0; a < 3; a++) for (let c = 0; c < 2; c++)
-    if (Math.abs(y - (U.rowY + a * U.rowGap)) < U.cellH / 2 + 4 && Math.abs(x - U.colX[c]) < U.cellW / 2) { set.row = a + 1; set.col = c; set.capture = true; }
+    if (Math.abs(y - (U.rowY + a * U.rowGap)) < U.cellH / 2 + 4 && Math.abs(x - U.colX[c]) < U.cellW / 2) { set.row = a + 2; set.col = c; set.capture = true; }
 }
 const W_MID = VIEW_W / 2;
 
 /** A finger or the mouse held on the volume slider, or dragging the stats list. */
-let drag: { id: number; kind: 'vol' | 'scroll'; y: number; s: number } | null = null;
+let drag: { id: number; kind: 'vol' | 'music' | 'scroll'; y: number; s: number } | null = null;
 const volAt = (x: number) => Math.round(((x - SET_UI.sliderX) / SET_UI.sliderW) * VOL_MAX);
 
 /** Start a drag if this press is on something draggable. Returns true if it is. */
 function dragStart(id: number, x: number, y: number): boolean {
   if (portrait()) return false;
   const U = SET_UI, c = CLOSE_BTN;
-  if (screen === 'settings' && Math.abs(y - U.volY) < 26 && x > U.sliderX - 30 && x < U.sliderX + U.sliderW + 40) {
-    drag = { id, kind: 'vol', y, s: 0 };
-    set.row = 0;
+  if (screen === 'settings' && x > U.sliderX - 30 && x < U.sliderX + U.sliderW + 40 && (Math.abs(y - U.volY) < 22 || Math.abs(y - U.musicY) < 22)) {
+    const music = Math.abs(y - U.musicY) < 22;
+    drag = { id, kind: music ? 'music' : 'vol', y, s: 0 };
+    set.row = music ? 1 : 0;
     set.capture = false;
-    setVolume(volAt(x));
+    if (music) setMusicVolume(volAt(x)); else setVolume(volAt(x));
     return true;
   }
   if (screen === 'stats' && !(touchMode && x >= c.x - 10 && y <= c.y + c.h + 10)) {
@@ -718,6 +750,7 @@ window.addEventListener('pointermove', (e) => {
   if (drag && e.pointerId === drag.id) {
     const { x, y } = viewXY(e);
     if (drag.kind === 'vol') setVolume(volAt(x));
+    else if (drag.kind === 'music') setMusicVolume(volAt(x));
     else statsScroll = drag.s - (y - drag.y);
     return;
   }
@@ -803,7 +836,8 @@ function frame(now: number) {
     reached(session.confirmed);
     const waiting = session.stalled && session.silence > 20;
     const status = session.desync ? 'OUT OF SYNC - restart the game' : `online  ${session.frame - session.confirmedFrame}f`;
-    drawGame(ctx, s, levelAt(s, levels), where(s), dt, waiting, { you: net.me, status });
+    const pings = session.ping.filter((_, i) => i !== net.me).map((p) => (p < 0 ? '...' : String(Math.round(p))));
+    drawGame(ctx, s, levelAt(s, levels), where(s), dt, waiting, { you: net.me, status }, [...nowPlaying(), `ping ${pings.join(' / ')} ms`]);
     if (session.silence > 600) { if (net.role === 'host') endSession(); else fail('Connection lost.'); }
   } else if (screen === 'game' && game) {
     acc += dt;
@@ -824,7 +858,7 @@ function frame(now: number) {
     }
     if (!game.paused && game.phase !== 'over' && game.phase !== 'won') addPlayTime(dt);
     if (!practice && levels === TOWER) reached(game);
-    drawGame(ctx, game, levelAt(game, levels), where(game), game.paused ? 0 : dt, false);
+    drawGame(ctx, game, levelAt(game, levels), where(game), game.paused ? 0 : dt, false, undefined, nowPlaying());
   } else if (screen === 'lobby') {
     menu.t += dt;
     const host = net.role === 'host';
@@ -838,7 +872,7 @@ function frame(now: number) {
     });
   } else if (screen === 'settings') {
     menu.t += dt;
-    drawSettings(ctx, { t: menu.t, vol: settings.vol, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
+    drawSettings(ctx, { t: menu.t, vol: settings.vol, music: settings.music, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
   } else if (screen === 'stats') {
     menu.t += dt;
     statsScroll = drawStats(ctx, { life, floors: FLOORS.map((f, i) => (i <= floorOf(reach) ? f.name : '')), scroll: statsScroll });
@@ -850,6 +884,7 @@ function frame(now: number) {
     if (lastScreen && lastScreen !== 'menu') nextSlogan();
     drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode], playSecs: life.playSecs, controls: [controlsLine(0), controlsLine(1)], slogan: SLOGANS[slogan] });
   }
+  setMusic(musicFor());
   // a finished game shows GAME OVER / YOU WIN for a moment, then the results (Enter or a tap skips ahead)
   const done = screen === 'game' ? (session ? session.confirmed : game) : null;
   if (done && (done.phase === 'over' || done.phase === 'won')) {

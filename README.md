@@ -15,7 +15,7 @@ npm run build      # static site in dist/; pushing to main deploys it via GitHub
 ```
 
 Controls: arrows + Space (player 2 on one keyboard: A / D + W), Esc to pause. Both players' keys
-can be changed under **Settings** on the menu, along with the sound effects volume
+can be changed under **Settings** on the menu, along with the sound effects and music volumes
 (`src/settings.ts`, saved in the browser as `splitstorm.settings.v1`).
 On a phone: left thumb slides to move, right thumb holds to fire.
 
@@ -62,6 +62,7 @@ All 57 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each f
 - The map shows names only for floors and levels already seen. A seen level can be picked directly for practice; practice runs save nothing.
 - Online, the host can start no higher than the lowest floor anyone in the room has reached. Everyone playing saves what the run reaches.
 - The game deliberately explains little. Level hints show only on the pause screen.
+- Music (`src/music.ts`): each game starts the track rotation at a different point, one track per floor and a boss track on a floor's last level, with a fade between tracks. While testing, the top-left corner names the track playing and, online, shows the live ping to each other player.
 
 Weapons beyond the harpoon, twin harpoon, sticky vine, pulse gun and beam:
 
@@ -207,6 +208,7 @@ secret read key.
 | `src/net.ts` | Rooms and peer-to-peer links. |
 | `src/main.ts` | Menus, lobby, input, game loop, uploads. |
 | `src/settings.ts` | Volume and key bindings. |
+| `src/music.ts` | Chiptune music: tracks as data and the player. `music.html` on the dev server auditions them. |
 | `src/stats.ts` | Lifetime stats. |
 | `src/render.ts` | Drawing. |
 | `scripts/` | Bot test, network tests, replay, report, fetch. |
