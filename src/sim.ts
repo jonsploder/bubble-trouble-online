@@ -127,6 +127,8 @@ export const TETHER = 170;
 export const roped = (m: Mode) => m === 'tethered' || m === 'onegun' || m === 'vip';
 /** Reach of the short harpoon above the head, the sword in front, and the lance's length. */
 export const STUB_REACH = 48;
+/** Ticks between short harpoon shots (0.3 s). */
+export const STUB_CD = 18;
 export const SWORD_REACH = 46;
 export const LANCE_LEN = 96;
 const DART_V0 = 150, DART_ACC = 1400, LANCE_SPEED = 800;
@@ -462,6 +464,7 @@ function stepPlayers(s: State, inputs: number[], L: Level, ev: GameEvent[], canF
       // The tip starts at the top of the head (the line already reaches down to the floor),
       // so a ball right overhead is hit almost at once.
       shot('wire', p.x, H - PH, { sticky: w === 'anchor', lim: w === 'stub' ? H - PH - STUB_REACH : 0 });
+      if (w === 'stub') p.cd = STUB_CD;
     }
     s.players[o].st.shots++;
     ev.push({ t: 'shoot', weapon: w, p: o });

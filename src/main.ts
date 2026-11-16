@@ -1,7 +1,7 @@
 import { applyVolume, pauseMusic, playEvents, setMusic, unlockAudio, volumeBlip } from './audio';
 import { TRACKS } from './music';
 import { ACTIONS, RESERVED, VOL_MAX, bind, controlsLine, isBound, keyName, resetKeys, saveSettings, settings } from './settings';
-import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
+import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET, V21_TOWER } from './levels';
 import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveNow, watchGame } from './stats';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
@@ -15,7 +15,7 @@ import type { Clip } from './highlights';
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 21;
+const VERSION = 22;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
@@ -67,7 +67,8 @@ let musicShift = 0;
 /** The corner line naming the track, while music is on. */
 const nowPlaying = () => { const t = settings.music ? TRACKS.find((x) => x.id === musicFor()) : null; return t ? [`♪ ${t.name}`] : []; };
 function musicFor(): string | null {
-  if (screen !== 'game') return 'lobbylights'; // menu, floor picker, lobby, settings, stats, results
+  // menu, floor picker, lobby, settings, stats, results; with menu music off, only while the music slider is picked (so it can be heard)
+  if (screen !== 'game') return settings.menuMusic || (screen === 'settings' && set.row === 1) ? 'lobbylights' : null;
   const s = session ? session.predicted : game;
   if (!s || s.phase === 'over' || s.phase === 'won') return null;
   const L = levelAt(s, levels), f = (L.floor ?? 1) - 1;
@@ -86,11 +87,19 @@ const menu = { floor: 0, level: 0, gmode: 0, mode: 0, row: 0, t: 0 }; // floor/l
 // once its first level has been reached; a level's name shows once the level has been seen.
 // Saved as the level's name, so adding levels to the tower doesn't move anyone's place.
 const SAVE_KEY = 'splitstorm.tower.v2';
-/** Before v2 the save was a position in the tower as it was before Photo Finish was added. */
-const OLD_SAVE_KEY = 'splitstorm.tower.v1', V1_TOWER = TOWER.filter((L) => L.name !== 'Photo Finish');
+/** Before v2 the save was a position in the tower as it was before Photo Finish (and Every Shot Counts) were added. */
+const OLD_SAVE_KEY = 'splitstorm.tower.v1', V1_TOWER = V21_TOWER.filter((n) => n !== 'Photo Finish' && n !== 'Every Shot Counts');
+/** Set once a save has been moved onto the v22 layout. Before it, a save naming a level that moved up the
+ *  tower means the player got that far on the old layout, not that far up the new one. */
+const LAYOUT_KEY = 'splitstorm.tower.layout', LAYOUT = '22';
+const MOVED_UP: Record<string, string> = { 'Photo Finish': 'Trigger Happy', 'Last Stand': 'Rush Hour' };
 let reach = 0;
 try {
-  const name = localStorage.getItem(SAVE_KEY) ?? V1_TOWER[Math.floor(+(localStorage.getItem(OLD_SAVE_KEY) ?? 0)) || 0]?.name;
+  let name = localStorage.getItem(SAVE_KEY) ?? V1_TOWER[Math.floor(+(localStorage.getItem(OLD_SAVE_KEY) ?? 0)) || 0];
+  if (localStorage.getItem(LAYOUT_KEY) !== LAYOUT) {
+    if (name && MOVED_UP[name]) { name = MOVED_UP[name]; localStorage.setItem(SAVE_KEY, name); }
+    localStorage.setItem(LAYOUT_KEY, LAYOUT);
+  }
   reach = Math.max(0, TOWER.findIndex((L) => L.name === name));
 } catch { /* private window: progress lasts for this visit */ }
 const floorOf = (level: number) => (TOWER[level]?.floor ?? 1) - 1;
@@ -313,10 +322,15 @@ function download(blob: Blob, name: string) {
 }
 
 /** The share sheet where there is one; else the clipboard (images only), else a download. */
+let lastShare = 0;
 function shareFile(blob: Blob, name: string) {
+  const now = performance.now();
+  if (now - lastShare < 1000) return; // a double click or a key repeat: one share
+  lastShare = now;
   const file = new File([blob], name, { type: blob.type });
   if (navigator.canShare?.({ files: [file] })) {
-    navigator.share({ files: [file], text: `Overpopped ${gameUrl()}` }).catch(() => {});
+    // just the file: with text alongside, some share targets paste it twice (the link is on the image anyway)
+    navigator.share({ files: [file] }).catch(() => {});
     return;
   }
   if (blob.type === 'image/png' && navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
@@ -652,7 +666,7 @@ function menuKey(code: string) {
 let statsScroll = 0;
 function openStats() { statsScroll = 0; screen = 'stats'; }
 
-/** The settings screen's cursor: row 0 sound effects, 1 music, 2-4 left/right/fire, 5 reset; col = player.
+/** The settings screen's cursor: row 0 sound effects, 1 music, 2 menu music, 3-5 left/right/fire, 6 reset; col = player.
  *  `inGame`: opened from the pause screen, drawn over the paused game (which keeps running online). */
 const set = { row: 0, col: 0, capture: false, inGame: false };
 const settingsShown = () => screen === 'settings' || (screen === 'game' && set.inGame);
@@ -666,26 +680,33 @@ function closeSettings() {
   else screen = 'menu';
 }
 function drawSettingsNow() {
-  drawSettings(ctx, { t: menu.t, vol: settings.vol, music: settings.music, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
+  drawSettings(ctx, { t: menu.t, vol: settings.vol, music: settings.music, menuMusic: settings.menuMusic, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
 }
 
 function settingsKey(code: string) {
   if (set.capture) {
     if (code === 'Escape') set.capture = false;
-    else if (!RESERVED.includes(code)) { bind(set.col, ACTIONS[set.row - 2], code); set.capture = false; }
+    else if (!RESERVED.includes(code)) { bind(set.col, ACTIONS[set.row - 3], code); set.capture = false; }
     return;
   }
   if (code === 'Escape') { closeSettings(); return; }
-  if (code === 'ArrowUp') set.row = (set.row + 5) % 6;
-  if (code === 'ArrowDown') set.row = (set.row + 1) % 6;
+  if (code === 'ArrowUp') set.row = (set.row + 6) % 7;
+  if (code === 'ArrowDown') set.row = (set.row + 1) % 7;
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
   if (d && set.row === 0) setVolume(settings.vol + d);
   else if (d && set.row === 1) setMusicVolume(settings.music + d);
-  else if (d && set.row <= 4) set.col = d > 0 ? 1 : 0;
+  else if (d && set.row === 2) toggleMenuMusic();
+  else if (d && set.row <= 5) set.col = d > 0 ? 1 : 0;
   if (code === 'Enter' || code === 'Space') {
-    if (set.row >= 2 && set.row <= 4) set.capture = true;
-    else if (set.row === 5) resetKeys();
+    if (set.row === 2) toggleMenuMusic();
+    else if (set.row >= 3 && set.row <= 5) set.capture = true;
+    else if (set.row === 6) resetKeys();
   }
+}
+
+function toggleMenuMusic() {
+  settings.menuMusic = !settings.menuMusic;
+  saveSettings();
 }
 
 function setMusicVolume(v: number) {
@@ -799,9 +820,10 @@ function shareInvite() {
 /** A tap or click on the settings screen: a key box starts listening for a key, or Reset. (The slider is dragged: see `dragStart`.) */
 function settingsTap(x: number, y: number) {
   const U = SET_UI;
-  if (Math.abs(y - U.resetY) < 20 && Math.abs(x - W_MID) < 110) { set.row = 5; resetKeys(); return; }
+  if (Math.abs(y - U.resetY) < 20 && Math.abs(x - W_MID) < 110) { set.row = 6; resetKeys(); return; }
+  if (Math.abs(y - U.menuY) < 18 && x > U.sliderX - 40 && x < U.sliderX + 200) { set.row = 2; toggleMenuMusic(); return; }
   for (let a = 0; a < 3; a++) for (let c = 0; c < 2; c++)
-    if (Math.abs(y - (U.rowY + a * U.rowGap)) < U.cellH / 2 + 4 && Math.abs(x - U.colX[c]) < U.cellW / 2) { set.row = a + 2; set.col = c; set.capture = true; }
+    if (Math.abs(y - (U.rowY + a * U.rowGap)) < U.cellH / 2 + 4 && Math.abs(x - U.colX[c]) < U.cellW / 2) { set.row = a + 3; set.col = c; set.capture = true; }
 }
 const W_MID = VIEW_W / 2;
 

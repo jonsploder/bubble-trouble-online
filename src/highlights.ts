@@ -14,12 +14,16 @@ export interface Clip {
 }
 
 const SNAP_EVERY = 30; // ticks between snapshots
-const KEEP = 20 * 60; // ticks of history kept (snapshots and inputs)
+const KEEP = 40 * 60; // ticks of history kept (snapshots and inputs)
 const ON = 0.3; // stress above this starts (or continues) a moment
-const CALM = 45; // ticks below it end one
-const LEAD = 90; // ticks of lead-in shown before it starts
-const MAX_LEN = 8 * 60;
-const MIN_SCORE = 8;
+const CALM = 60; // ticks below it end one
+const LEAD = 3 * 60; // lead-in shown before it starts
+const AFTER_HIT = 90; // a moment where someone goes down ends this long after the hit
+const MAX_LEN = 12 * 60;
+const MIN_LEN = 7 * 60;
+const MIN_ALIVE = 5 * 60; // everyone stays up for at least this long from the start of the clip...
+const MIN_TENSE = 90; // ...and the tense part before anyone goes down lasts at least this long: no clips of a quick death
+const MIN_SCORE = 12;
 const TOP = 3;
 const NEAR = 60; // px: a ball this far from a player starts to count
 
@@ -44,7 +48,8 @@ export class Highlights {
   private snaps: { n: number; json: string }[] = [];
   private inputs = new Map<number, number[]>();
   private downs: boolean[] = [];
-  private ep: { start: number; score: number; peak: number; peakV: number; calm: number } | null = null;
+  /** The moment in progress: when it started, its score, its tensest tick, ticks of calm since, and the tick someone first went down (-1: no one yet). */
+  private ep: { start: number; score: number; peak: number; peakV: number; calm: number; down: number } | null = null;
   private top: Clip[] = [];
 
   /** Call just before each step of the real (confirmed) game. */
@@ -60,28 +65,32 @@ export class Highlights {
   after(s: State, inputs: number[]) {
     this.inputs.set(this.n, inputs.slice());
     this.inputs.delete(this.n - KEEP - SNAP_EVERY);
-    let v = stress(s);
-    // someone going down is a moment in itself (or the dramatic end of one)
-    if (s.players.some((p, i) => p.down && !this.downs[i])) v += 6;
-    this.n++;
+    const v = stress(s), now = this.n++;
+    if (this.ep && this.ep.down < 0 && s.players.some((p, i) => p.down && !this.downs[i])) this.ep.down = now;
     if (v > ON) {
-      if (!this.ep) this.ep = { start: this.n - 1, score: 0, peak: this.n - 1, peakV: 0, calm: 0 };
+      if (!this.ep) this.ep = { start: now, score: 0, peak: now, peakV: 0, calm: 0, down: -1 };
       this.ep.score += v;
       this.ep.calm = 0;
-      if (v > this.ep.peakV) { this.ep.peakV = v; this.ep.peak = this.n - 1; }
+      if (v > this.ep.peakV) { this.ep.peakV = v; this.ep.peak = now; }
     } else if (this.ep && ++this.ep.calm >= CALM) this.close();
+    if (this.ep && this.ep.down >= 0 && now >= this.ep.down + AFTER_HIT) this.close();
   }
 
   private close() {
     const ep = this.ep!;
     this.ep = null;
     if (ep.score < MIN_SCORE) return;
+    if (ep.down >= 0 && ep.down - ep.start < MIN_TENSE) return; // just a hit, not a moment
     if (this.top.length >= TOP && ep.score <= this.top[TOP - 1].score) return;
-    let from = ep.start - LEAD, to = this.n;
-    if (to - from > MAX_LEN) { from = Math.max(from, ep.peak - MAX_LEN + 3 * 60); to = Math.min(to, from + MAX_LEN); }
+    let from = ep.start - LEAD, to = ep.down >= 0 ? Math.min(this.n, ep.down + AFTER_HIT) : this.n;
+    // too long: keep the stretch around its tensest point, ending soon after any hit
+    if (to - from > MAX_LEN) from = Math.max(from, Math.min(ep.peak - MAX_LEN / 2, to - MAX_LEN));
+    from = Math.min(from, to - MIN_LEN); // short ones get a longer lead-in
     let snap = this.snaps[0];
     for (const sn of this.snaps) if (sn.n <= from) snap = sn;
     if (!snap) return;
+    to = Math.min(to, snap.n + MAX_LEN + SNAP_EVERY);
+    if (ep.down >= 0 && ep.down - snap.n < MIN_ALIVE) return;
     const inputs: number[][] = [];
     for (let k = snap.n; k < to; k++) { const i = this.inputs.get(k); if (!i) return; inputs.push(i); }
     this.top.push({ snap: snap.json, inputs, score: ep.score });

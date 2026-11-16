@@ -3,7 +3,7 @@
 //
 //   npm run report               (fetch first with: npm run fetch-traces)
 //   npm run report -- --sweep    (also compare alternative netcode settings; slower)
-import { SETS } from '../src/levels';
+import { SETS, TOWER, V21_TOWER } from '../src/levels';
 import type { NetStats } from '../src/rollback';
 import { addStats, emptyTotals, loadSessions, runAll, setQuiet, sweep } from './tracelib';
 import type { ReplayResult, Totals } from './tracelib';
@@ -88,6 +88,8 @@ for (const r of recs) {
     let level = r.set === 'tower' && r.version < 18 && lv >= 7 ? lv + 1 : lv;
     // v21 put Every Shot Counts in at tower level 35 (index 34)
     if (r.set === 'tower' && r.version < 21 && level >= 34) level++;
+    // v22 moved Photo Finish, Quickstep and Last Stand
+    if (r.set === 'tower' && r.version < 22) level = TOWER.findIndex((L) => L.name === V21_TOWER[level]);
     const k = `${r.set}:${level}`;
     let a = agg.get(k);
     if (!a) { a = { games: 0, attempts: 0, clears: 0, firstTries: 0, firstClears: 0, clearTimes: [], lost: 0, quits: 0, solo: [0, 0], group: [0, 0] }; agg.set(k, a); }

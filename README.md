@@ -15,7 +15,7 @@ npm run build      # static site in dist/; pushing to main deploys it via GitHub
 ```
 
 Controls: arrows + Space (player 2 on one keyboard: A / D + W), Esc to pause. Both players' keys
-can be changed under **Settings** on the menu, along with the sound effects and music volumes
+can be changed under **Settings** on the menu, along with the sound effects and music volumes and whether the menu screens play music
 (`src/settings.ts`, saved in the browser as `splitstorm.settings.v1`).
 On a phone: left thumb slides to move, right thumb holds to fire.
 
@@ -38,19 +38,19 @@ restarts; the level restarts once everyone is down. Single-player games are alwa
 
 ## The Tower
 
-All 57 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each floor opens on a new idea:
+All 58 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each floor opens on a new idea:
 
 | Floor | Name | Levels |
 |---|---|---|
-| 1 | Ground Floor | 9: the basics, then Photo Finish (outrun three balls to the far wall) |
-| 2 | The Workshop | 8: gates, drops, a descending roof |
+| 1 | Ground Floor | 7: the basics |
+| 2 | The Workshop | 8: Quickstep, then gates, drops, a descending roof |
 | 3 | Portal Gallery | 6: portals, balls that bounce on the spot |
 | 4 | Split Level | 7: balls that split into 3 and 4 (the number on a ball is how many pieces) |
 | 5 | The Armoury | 6: odd weapons (below), and Every Shot Counts: a harpoon, vine or rocket that reaches the roof without hitting a ball costs a life (level flag `noMiss`; the roof glows red) |
 | 6 | Heavy Weather | 7: armour, wind, gravity flips |
 | 7 | Machine Room | 6: spin, moving blocks, crushers |
-| 8 | Overclocked | 6: speed and cursed drops |
-| 9 | Summit | 3: everything |
+| 8 | Overclocked | 7: speed and cursed drops, and Photo Finish (outrun three balls to the far wall) |
+| 9 | Summit | 4: Last Stand, then everything |
 
 - A run starts at the first level of any unlocked floor with 3 lives each. Game over means starting that floor again.
 - The floor picker opens on the highest floor reached. If you start lower, that floor is remembered until the page is reloaded (it isn't saved).
@@ -68,7 +68,7 @@ Weapons beyond the harpoon, twin harpoon, sticky vine, pulse gun and beam:
 
 | Weapon | What it does |
 |---|---|
-| Short harpoon | Reaches only 48 px above your head. |
+| Short harpoon | Reaches only 48 px above your head, and fires at most once every 0.3 s. |
 | Sword | A swipe 46 px in front of you, at body height. |
 | Floor bolt | One bolt at a time along the floor, the way you face, picking up speed. |
 | Rocket | The same, straight up, and wide (18 px). Drops in ordinary levels too. |
@@ -80,7 +80,7 @@ The pause screen lists every mode's rules. The results screen ranks every player
 
 The results screen also has:
 
-- **Top moments** (M): the three tensest stretches of the game, picked by how close balls came to standing players (and anyone going down), each replayed from a snapshot plus the recorded inputs (`src/highlights.ts`; online it records the confirmed frames). Pick one to watch it full size; **G** saves it as a 480×270 GIF (`gifenc`, loaded only when needed). Where the browser has a share sheet, a second press shares the GIF.
+- **Top moments** (M): the three tensest stretches of the game, picked by how close balls came to standing players. A clip runs 7 to 12 s, and one that ends in a hit shows at least 5 s of staying alive first (a quick death alone never counts). Each is replayed from a snapshot plus the recorded inputs (`src/highlights.ts`; online it records the confirmed frames). Pick one to watch it full size; **G** saves it as a 480×270 GIF (`gifenc`, loaded only when needed). Where the browser has a share sheet, a second press shares the GIF.
 - **Share** (C): the results as a 1200×675 picture (`drawShareCard`) through the share sheet, else copied to the clipboard, else downloaded.
 
 **Drops** on the menu shows every kind of drop; ones never picked up stay hidden. Picked-up kinds are kept in the lifetime stats (`drops`), from a bitmask each player carries through the game (`st.got`).

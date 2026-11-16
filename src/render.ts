@@ -665,15 +665,17 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
 }
 
 /** Settings layout (view coordinates), shared with the touch handling. */
-export const SET_UI = { volY: 108, musicY: 152, label: 300, sliderX: 340, sliderW: 360, headY: 212, rowY: 254, rowGap: 44, colX: [450, 680], cellW: 190, cellH: 34, resetY: 410 };
+export const SET_UI = { volY: 100, musicY: 140, menuY: 180, label: 300, sliderX: 340, sliderW: 360, headY: 232, rowY: 272, rowGap: 44, colX: [450, 680], cellW: 190, cellH: 34, resetY: 418 };
 
 export interface SettingsView {
   t: number;
   /** Sound effects and music volume, 0..volMax */
   vol: number; music: number; volMax: number;
+  /** Music on the screens outside a game. */
+  menuMusic: boolean;
   /** keys[player][action] as display names, '' for none. */
   keys: string[][];
-  /** 0 sound effects, 1 music, 2-4 left/right/fire, 5 reset. */
+  /** 0 sound effects, 1 music, 2 menu music, 3-5 left/right/fire, 6 reset. */
   row: number; col: number;
   /** Waiting for a key for the selected cell. */
   capture: boolean;
@@ -698,13 +700,16 @@ export function drawSettings(ctx: CanvasRenderingContext2D, v: SettingsView) {
     text(ctx, val === 0 ? 'Off' : `${Math.round(f * 100)}%`, U.sliderX + U.sliderW + 30, y, 16, '#e8eaf6', 'left');
   });
 
+  text(ctx, 'Menu music', U.label, U.menuY, 18, sel(2) ? '#ffd43b' : '#8a90c7', 'right');
+  text(ctx, v.menuMusic ? 'On' : 'Off', U.sliderX, U.menuY, 18, v.menuMusic ? (sel(2) ? '#ffd43b' : '#e8eaf6') : '#5b6090', 'left');
+
   // controls
   ['Player 1', 'Player 2 (same keyboard)'].forEach((k, c) => text(ctx, k, U.colX[c], U.headY, 14, PLAYER_COL[c], 'center', 600));
   ['Left', 'Right', 'Fire'].forEach((k, a) => {
     const y = U.rowY + a * U.rowGap;
-    text(ctx, k, U.label, y, 18, sel(a + 2) ? '#ffd43b' : '#8a90c7', 'right');
+    text(ctx, k, U.label, y, 18, sel(a + 3) ? '#ffd43b' : '#8a90c7', 'right');
     for (let c = 0; c < 2; c++) {
-      const on = sel(a + 2) && v.col === c, x = U.colX[c] - U.cellW / 2;
+      const on = sel(a + 3) && v.col === c, x = U.colX[c] - U.cellW / 2;
       ctx.fillStyle = on ? '#1b1e3d' : '#10122a';
       ctx.fillRect(x, y - U.cellH / 2, U.cellW, U.cellH);
       ctx.strokeStyle = on ? '#ffd43b' : '#2b2f55';
@@ -715,10 +720,10 @@ export function drawSettings(ctx: CanvasRenderingContext2D, v: SettingsView) {
       } else text(ctx, v.keys[c][a] || '-', U.colX[c], y + 1, 16, v.keys[c][a] ? '#e8eaf6' : '#5b6090', 'center', 600);
     }
   });
-  text(ctx, 'Reset controls', W / 2, U.resetY, 16, sel(5) ? '#ffd43b' : '#8a90c7');
+  text(ctx, 'Reset controls', W / 2, U.resetY, 16, sel(6) ? '#ffd43b' : '#8a90c7');
 
   if (touch) closeButton(ctx);
-  else text(ctx, v.capture ? 'Press a key for it   Esc: cancel' : v.row <= 1 ? '< >: volume   Esc: back' : v.row === 5 ? 'Enter: reset   Esc: back' : 'Enter: change key   Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
+  else text(ctx, v.capture ? 'Press a key for it   Esc: cancel' : v.row <= 1 ? '< >: volume   Esc: back' : v.row === 2 ? 'Enter: on / off   Esc: back' : v.row === 6 ? 'Enter: reset   Esc: back' : 'Enter: change key   Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
 }
 
 export interface StatsView {

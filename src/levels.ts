@@ -687,20 +687,30 @@ const floor = (name: string, levels: string[]) => ({
   levels: levels.map((n) => { const L = byName.get(n); if (!L) throw new Error(`no level called ${n}`); return L; }),
 });
 export const FLOORS = [
-  floor('Ground Floor', ['Warm-Up', 'Two-Way Street', 'The Big One', 'Open Sesame', 'Overhang', 'Squeeze', 'Trigger Happy', 'Photo Finish', 'Quickstep']),
-  floor('The Workshop', ['Jailbreak', 'Careful What You Grab', 'Convoy', 'Pressure Cooker', 'Pinball', 'Laser Surgery', 'Rush Hour', 'Last Stand']),
+  floor('Ground Floor', ['Warm-Up', 'Two-Way Street', 'The Big One', 'Open Sesame', 'Overhang', 'Squeeze', 'Trigger Happy']),
+  floor('The Workshop', ['Quickstep', 'Jailbreak', 'Careful What You Grab', 'Convoy', 'Pressure Cooker', 'Pinball', 'Laser Surgery', 'Rush Hour']),
   floor('Portal Gallery', ['Wormhole', 'Return Trip', 'Round Robin', 'Metronome', 'Through Traffic', 'Drum Line']),
   floor('Split Level', ['Triplets', "Three's a Crowd", 'Quadruplets', 'Mixed Bag', 'Split Ends', 'Numbers Game', 'Hall of Mirrors']),
   floor('The Armoury', ['Point Blank', 'Light Show', 'En Garde', 'Broadside', 'Every Shot Counts', 'Arms Race']),
   floor('Heavy Weather', ['Tin Cans', 'Down Under', 'Upside Down', 'Headwind', 'Cannonballs', 'Weathervane', 'Flip Side']),
   floor('Machine Room', ['Carousel', 'Elevator', 'Crusher', 'Lockdown', 'Vertigo', 'Minefield']),
-  floor('Overclocked', ['Too Much Coffee', 'Express', 'Butterfingers', 'Espresso Shot', 'Do Not Touch', 'Jitterbug']),
-  floor('Summit', ['Revolving Door', 'Eye of the Storm', 'Chaos Theory']),
+  floor('Overclocked', ['Too Much Coffee', 'Express', 'Photo Finish', 'Butterfingers', 'Espresso Shot', 'Do Not Touch', 'Jitterbug']),
+  floor('Summit', ['Last Stand', 'Revolving Door', 'Eye of the Storm', 'Chaos Theory']),
 ];
 export const TOWER: Level[] = FLOORS.flatMap((f, i) => f.levels.map((L) => ({ ...L, floor: i + 1 })));
 /** Index in TOWER of each floor's first level. */
 export const FLOOR_START = FLOORS.map((_, i) => FLOORS.slice(0, i).reduce((a, f) => a + f.levels.length, 0));
 if (TOWER.length !== byName.size) throw new Error('every level must be on exactly one floor');
+
+/** The tower's order (level names) before v22 moved Photo Finish to Overclocked, Quickstep to the Workshop and
+ *  Last Stand to the Summit. Old saves and level logs count from it. */
+export const V21_TOWER: string[] = (() => {
+  const moved = ['Photo Finish', 'Quickstep', 'Last Stand'];
+  const n = TOWER.map((L) => L.name).filter((x) => !moved.includes(x));
+  n.splice(n.indexOf('Trigger Happy') + 1, 0, 'Photo Finish', 'Quickstep');
+  n.splice(n.indexOf('Rush Hour') + 1, 0, 'Last Stand');
+  return n;
+})();
 
 // The first three are the sets the tower was built from; old session logs still refer to them by position.
 export const SETS = [

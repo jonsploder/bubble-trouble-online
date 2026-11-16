@@ -11,13 +11,15 @@ const defaultKeys = (): Controls => [
   { left: ['KeyA'], right: ['KeyD'], fire: ['KeyW', 'ShiftLeft'] },
 ];
 
-export const settings = { vol: 10, music: 6, keys: defaultKeys() };
+/** `menuMusic`: play the menu track on screens outside a game (game music is unaffected). */
+export const settings = { vol: 10, music: 6, menuMusic: true, keys: defaultKeys() };
 /** Volume steps on the slider. */
 export const VOL_MAX = 10;
 
 try {
   const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}');
   if (typeof saved.vol === 'number') settings.vol = Math.max(0, Math.min(VOL_MAX, Math.round(saved.vol)));
+  if (typeof saved.menuMusic === 'boolean') settings.menuMusic = saved.menuMusic;
   if (typeof saved.music === 'number') settings.music = Math.max(0, Math.min(VOL_MAX, Math.round(saved.music)));
   if (Array.isArray(saved.keys) && saved.keys.length === 2) {
     const ok = saved.keys.every((p: Record<string, unknown>) => ACTIONS.every((a) => Array.isArray(p?.[a]) && (p[a] as unknown[]).every((k) => typeof k === 'string')));
