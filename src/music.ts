@@ -7,7 +7,7 @@
 export interface Track {
   id: string; name: string;
   /** What it's a candidate for. */
-  kind: 'level' | 'boss';
+  kind: 'level' | 'boss' | 'menu';
   bpm: number;
   /** MIDI note of melody step 0 (the key note). */
   root: number;
@@ -402,6 +402,24 @@ TRACKS.push(
     drums2: 'k . . . . . h . s . . k . k s s',
   },
 );
+
+// ---- menus ----
+TRACKS.push({
+  id: 'lobbylights', name: 'Lobby Lights', kind: 'menu', style: 'modern', tone: 'pluck', bpm: 100, root: 72, scale: MAJOR, chords: [3, 0, 4, 5],
+  lead: [
+    '7 - - - 5 - 3 - 5 - - - . . 7 -',
+    '9 - - - 7 - 4 - 7 - - - . . 9 -',
+    '8 - - - 6 - 4 - 6 - - - . . 8 -',
+    '9 - - - 7 - 5 - 7 - 9 - 12 - - -',
+    '10 - - 12 - - 14 - 12 - - - . . . .',
+    '9 - - 11 - - 14 - 11 - - - . . . .',
+    '11 - - 13 - - 15 - 13 - - - . . . .',
+    '12 - - 9 - - 7 - 9 - - - 7 - 5 -',
+  ],
+  bass: 'R . . . . . R . . . R . . . . .',
+  arp: '0 . 2 . 3 . 2 . 0 . 2 . 3 . 2 .',
+  drums: 'k . . h . . h . s . . h . . h .',
+});
 
 type Slot = { n: number; len: number } | null;
 /** A bar of melody as notes with lengths. */

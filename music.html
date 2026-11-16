@@ -28,9 +28,9 @@
   let music = null;
   const list = document.getElementById('list');
   const buttons = [];
-  for (const [style, kind] of [['modern', 'level'], ['modern', 'boss'], ['chip', 'level'], ['chip', 'boss']]) {
+  for (const [style, kind] of [['modern', 'menu'], ['modern', 'level'], ['modern', 'boss'], ['chip', 'level'], ['chip', 'boss']]) {
     const h = document.createElement('h2');
-    h.textContent = (style === 'modern' ? 'MODERN SOUND' : 'FIRST VERSION (8-BIT)') + ' · ' + (kind === 'level' ? 'ORDINARY LEVELS' : 'LAST LEVEL OF A FLOOR');
+    h.textContent = (style === 'modern' ? 'MODERN SOUND' : 'FIRST VERSION (8-BIT)') + ' · ' + (kind === 'menu' ? 'MENUS' : kind === 'level' ? 'ORDINARY LEVELS' : 'LAST LEVEL OF A FLOOR');
     list.append(h);
     for (const t of TRACKS.filter((x) => x.kind === kind && (x.style ?? 'chip') === style)) {
       const b = document.createElement('button');

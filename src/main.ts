@@ -52,8 +52,8 @@ const SLOGANS = [
   'Ballpark estimate: too many', "You'll bounce back from this", 'Burst your bubble', 'Enter the ball of fame', "Pop 'til you drop",
 ];
 // PROVISIONAL music plan until the tracks are chosen: floors take turns with the level
-// tracks, the last level of a floor gets a boss track, menus are silent. On the settings
-// screen the music slider plays a track so the volume can be heard.
+// tracks, the last level of a floor gets a boss track, and every screen outside a game plays
+// the menu track (so the music slider in Settings can be heard as it moves).
 const LEVEL_TRACKS = ['skyline', 'nightshift2', 'hopskip', 'neontide', 'glass', 'backalley', 'circuit', 'updraft', 'sugarrush2', 'paperplanes', 'lowtide', 'sunday', 'nightbus', 'confetti'];
 const BOSS_TRACKS = ['showdown', 'curtain', 'undertow', 'redalert2', 'slowburn', 'meltdown2', 'nowayout'];
 /** Each game starts the rotation somewhere else (from its seed, so online players hear the same), so every track gets heard. */
@@ -61,8 +61,8 @@ let musicShift = 0;
 /** The corner line naming the track, while music is on. */
 const nowPlaying = () => { const t = settings.music ? TRACKS.find((x) => x.id === musicFor()) : null; return t ? [`♪ ${t.name}`] : []; };
 function musicFor(): string | null {
-  if (screen === 'settings') return set.row === 1 ? LEVEL_TRACKS[0] : null;
-  const s = screen === 'game' ? (session ? session.predicted : game) : null;
+  if (screen !== 'game') return 'lobbylights'; // menu, floor picker, lobby, settings, stats, results
+  const s = session ? session.predicted : game;
   if (!s || s.phase === 'over' || s.phase === 'won') return null;
   if (s.mode === 'versus') return 'sugarrush';
   const L = levelAt(s, levels), f = (L.floor ?? 1) - 1;
