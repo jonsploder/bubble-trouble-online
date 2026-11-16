@@ -700,17 +700,22 @@ export interface StatsView {
   life: Lifetime;
   /** Floor names, or '' for floors not reached yet. */
   floors: string[];
+  /** How far the list on the left is scrolled, in px. */
+  scroll: number;
 }
 
-/** Lifetime numbers on the left, fastest clear of each floor on the right. */
-export function drawStats(ctx: CanvasRenderingContext2D, v: StatsView) {
+/** Stats layout: the scrolling list on the left (view coordinates). */
+export const STATS_UI = { x0: 40, x1: 440, top: 118, bottom: 486, rowH: 40, split: 470 };
+
+/** Lifetime numbers in a scrolling list on the left, fastest clear of each floor on the right. Returns the scroll, kept in range. */
+export function drawStats(ctx: CanvasRenderingContext2D, v: StatsView): number {
   ctx.clearRect(0, 0, VIEW_W, VIEW_H);
   ctx.fillStyle = '#07080f';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  const L = v.life;
+  const L = v.life, U = STATS_UI;
   text(ctx, 'STATS', 40, 50, 30, '#fff', 'left');
   const acc = L.shots >= 10 ? `${Math.round((100 * L.pops) / L.shots)}%` : '-';
-  const tiles: [string, string][] = [
+  const rows: [string, string][] = [
     ['Time played', L.playSecs >= 60 ? longTime(L.playSecs) : clock(L.playSecs)],
     ['Games', String(L.games)],
     ['Online games', String(L.onlineGames)],
@@ -718,22 +723,42 @@ export function drawStats(ctx: CanvasRenderingContext2D, v: StatsView) {
     ['Shots fired', L.shots.toLocaleString()],
     ['Accuracy', acc],
     ['Deaths', L.deaths.toLocaleString()],
-    ['Pops per death', L.deaths ? (L.pops / L.deaths).toFixed(1) : '-'],
     ['Drops picked up', L.picks.toLocaleString()],
     ['Levels cleared', String(L.levelsCleared)],
     ['Floors cleared', String(L.floorsCleared)],
     ['Highest floor', String(v.floors.filter(Boolean).length)],
   ];
-  tiles.forEach(([k, val], i) => {
-    const x = 40 + (i % 3) * 140, y = 84 + Math.floor(i / 3) * 76;
-    ctx.fillStyle = '#10122a';
-    ctx.fillRect(x, y, 128, 66);
-    ctx.strokeStyle = '#2b2f55';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x, y, 128, 66);
-    text(ctx, k.toUpperCase(), x + 12, y + 18, 10, '#8a90c7', 'left');
-    text(ctx, val, x + 12, y + 44, 22, '#fff', 'left');
+  const view = U.bottom - U.top, max = Math.max(0, rows.length * U.rowH - view);
+  const scroll = Math.max(0, Math.min(max, v.scroll));
+
+  text(ctx, 'LIFETIME', U.x0, 100, 12, '#ffa94d', 'left');
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, U.top, U.split, view); ctx.clip();
+  rows.forEach(([k, val], i) => {
+    const y = U.top + i * U.rowH - scroll + U.rowH / 2;
+    if (y < U.top - U.rowH || y > U.bottom + U.rowH) return;
+    text(ctx, k, U.x0, y, 16, '#8a90c7', 'left', 600);
+    text(ctx, val, U.x1, y, 18, '#fff', 'right');
+    ctx.fillStyle = '#1a1d3a';
+    ctx.fillRect(U.x0, y + U.rowH / 2 - 1, U.x1 - U.x0, 1);
   });
+  ctx.restore();
+  if (max > 0) {
+    // fades where the list goes on, and a thin scrollbar
+    const fade = (y: number, up: boolean) => {
+      const g = ctx.createLinearGradient(0, y, 0, up ? y + 28 : y - 28);
+      g.addColorStop(0, '#07080f'); g.addColorStop(1, 'rgba(7,8,15,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, up ? y : y - 28, U.split, 28);
+    };
+    if (scroll > 0) fade(U.top, true);
+    if (scroll < max) fade(U.bottom, false);
+    const h = (view * view) / (view + max), y = U.top + ((view - h) * scroll) / max;
+    ctx.fillStyle = '#2b2f55';
+    ctx.beginPath(); ctx.roundRect(U.x1 + 14, y, 4, h, 2); ctx.fill();
+  }
+  ctx.fillStyle = '#1a1d3a';
+  ctx.fillRect(U.split, 84, 1, U.bottom - 84);
 
   const X = 500;
   text(ctx, 'FASTEST FLOORS', X, 100, 12, '#ffa94d', 'left');
@@ -745,7 +770,8 @@ export function drawStats(ctx: CanvasRenderingContext2D, v: StatsView) {
     if (best && L.bestFloorBy[i]) text(ctx, L.bestFloorBy[i], W - 40, y + 11, 10, '#8a90c7', 'right', 400);
   });
   if (touch) closeButton(ctx);
-  else text(ctx, 'Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
+  else text(ctx, max > 0 ? 'Up/Down or wheel: scroll   Esc: back' : 'Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
+  return scroll;
 }
 
 /** Layout of the tower screen (view coordinates), shared with the touch handling. */

@@ -4,7 +4,7 @@ import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
 import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveNow, watchGame } from './stats';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
-import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawSettings, drawStats, drawTower, SET_UI, fxEvents, setTouch } from './render';
+import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawSettings, drawStats, drawTower, SET_UI, STATS_UI, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
 import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
@@ -47,8 +47,8 @@ let pausePulse = false; // send IN_PAUSE on the next tick
 const keys = new Set<string>();
 // One of these shows under the title, a different one each time the menu comes back.
 const SLOGANS = [
-  'Pop responsibly.', 'Divide and be conquered.', 'Split happens.', 'Pop culture.', 'Breaking up is easy.', 'Have a ball.',
-  'Ballpark estimate: too many.', "You'll bounce back from this.", 'Burst your bubble.', 'Enter the ball of fame.', "Pop 'til you drop.",
+  'Pop responsibly', 'Divide and be conquered', 'Split happens', 'Pop culture', 'Breaking up is easy', 'Have a ball',
+  'Ballpark estimate: too many', "You'll bounce back from this", 'Burst your bubble', 'Enter the ball of fame', "Pop 'til you drop",
 ];
 let slogan = Math.floor(Math.random() * SLOGANS.length), lastScreen = '';
 const nextSlogan = () => { slogan = (slogan + 1 + Math.floor(Math.random() * (SLOGANS.length - 1))) % SLOGANS.length; };
@@ -360,7 +360,10 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (screen === 'menu') menuKey(e.code);
   else if (screen === 'settings') settingsKey(e.code);
-  else if (screen === 'stats') { if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'KeyS' || e.code === 'Space') screen = 'menu'; }
+  else if (screen === 'stats') {
+    if (e.code === 'ArrowDown' || e.code === 'ArrowUp') statsScroll += (e.code === 'ArrowDown' ? 1 : -1) * STATS_UI.rowH;
+    else if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'KeyS' || e.code === 'Space') screen = 'menu';
+  }
   else if (screen === 'tower') towerKey(e.code);
   else if (screen === 'lobby') lobbyKey(e.code);
   else if (screen === 'results') { if (e.code === 'Enter' || e.code === 'Escape' || e.code === 'Space') closeResults(); }
@@ -382,12 +385,12 @@ function startLocal(level: number) {
 }
 
 function menuKey(code: string) {
-  if (code === 'KeyS') { screen = 'stats'; return; }
+  if (code === 'KeyS') { openStats(); return; }
   if (code === 'ArrowUp') menu.row = (menu.row + 3) % 4;
   if (code === 'ArrowDown') menu.row = (menu.row + 1) % 4;
   if ((code === 'Enter' || code === 'Space') && menu.row >= 2) {
     if (menu.row === 2) { set.row = 0; set.col = 0; set.capture = false; screen = 'settings'; }
-    else screen = 'stats';
+    else openStats();
     return;
   }
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
@@ -401,6 +404,9 @@ function menuKey(code: string) {
     else { menu.floor = floorOf(reach); menu.level = 0; screen = 'tower'; }
   }
 }
+
+let statsScroll = 0;
+function openStats() { statsScroll = 0; screen = 'stats'; }
 
 /** The settings screen's cursor: row 0 volume, 1-3 left/right/fire, 4 reset; col = player. */
 const set = { row: 0, col: 0, capture: false };
@@ -494,7 +500,9 @@ function gameKey(code: string) {
 // ---------------------------------------------------------------- touch
 // Left half of the screen is a slide pad (drag left/right of where the thumb landed),
 // right half is the fire button. Touches map onto the same input bits as the keyboard.
-let touchMode = false;
+// A phone or tablet shows tap wording from the start, before the first touch.
+let touchMode = matchMedia('(pointer: coarse)').matches;
+setTouch(touchMode);
 const pointers = new Map<number, { x: number; x0: number; pad: boolean }>();
 const SLIDE_DEAD = 10, SLIDE_MAX = 26; // CSS px
 
@@ -516,6 +524,43 @@ function shareInvite() {
   else navigator.clipboard?.writeText(url).then(() => { net.copied = true; }, () => {});
 }
 
+/** A tap or click on the settings screen: a key box starts listening for a key, or Reset. (The slider is dragged: see `dragStart`.) */
+function settingsTap(x: number, y: number) {
+  const U = SET_UI;
+  if (Math.abs(y - U.resetY) < 20 && Math.abs(x - W_MID) < 110) { set.row = 4; resetKeys(); return; }
+  for (let a = 0; a < 3; a++) for (let c = 0; c < 2; c++)
+    if (Math.abs(y - (U.rowY + a * U.rowGap)) < U.cellH / 2 + 4 && Math.abs(x - U.colX[c]) < U.cellW / 2) { set.row = a + 1; set.col = c; set.capture = true; }
+}
+const W_MID = VIEW_W / 2;
+
+/** A finger or the mouse held on the volume slider, or dragging the stats list. */
+let drag: { id: number; kind: 'vol' | 'scroll'; y: number; s: number } | null = null;
+const volAt = (x: number) => Math.round(((x - SET_UI.sliderX) / SET_UI.sliderW) * VOL_MAX);
+
+/** Start a drag if this press is on something draggable. Returns true if it is. */
+function dragStart(id: number, x: number, y: number): boolean {
+  if (portrait()) return false;
+  const U = SET_UI, c = CLOSE_BTN;
+  if (screen === 'settings' && Math.abs(y - U.volY) < 26 && x > U.sliderX - 30 && x < U.sliderX + U.sliderW + 40) {
+    drag = { id, kind: 'vol', y, s: 0 };
+    set.row = 0;
+    set.capture = false;
+    setVolume(volAt(x));
+    return true;
+  }
+  if (screen === 'stats' && !(touchMode && x >= c.x - 10 && y <= c.y + c.h + 10)) {
+    drag = { id, kind: 'scroll', y, s: statsScroll };
+    return true;
+  }
+  return false;
+}
+
+/** Pointer position in view coordinates. */
+function viewXY(e: PointerEvent | MouseEvent) {
+  const r = canvas.getBoundingClientRect();
+  return { x: ((e.clientX - r.left) / r.width) * VIEW_W, y: ((e.clientY - r.top) / r.height) * VIEW_H };
+}
+
 /** Handle a tap on menus/buttons. Returns false if the touch should drive the player instead. */
 function tapUI(x: number, y: number): boolean {
   if (portrait()) return true;
@@ -523,14 +568,10 @@ function tapUI(x: number, y: number): boolean {
   const close = x >= c.x - 10 && y <= c.y + c.h + 10;
   const near = (yy: number, r = 18) => Math.abs(y - yy) < r;
   const dir = x > VIEW_W / 2 ? 'ArrowRight' : 'ArrowLeft';
-  if (screen === 'stats') { screen = 'menu'; return true; }
+  if (screen === 'stats') { if (close) screen = 'menu'; return true; }
   if (screen === 'settings') {
-    const U = SET_UI;
     if (close) { set.capture = false; screen = 'menu'; }
-    else if (near(U.volY, 26) && x > U.sliderX - 30 && x < U.sliderX + U.sliderW + 30) { set.row = 0; setVolume(Math.round(((x - U.sliderX) / U.sliderW) * VOL_MAX)); }
-    else if (near(U.resetY, 20)) { set.row = 4; resetKeys(); }
-    else for (let a = 0; a < 3; a++) for (let c = 0; c < 2; c++)
-      if (near(U.rowY + a * U.rowGap, U.cellH / 2 + 4) && Math.abs(x - U.colX[c]) < U.cellW / 2) { set.row = a + 1; set.col = c; set.capture = true; }
+    else settingsTap(x, y);
     return true;
   }
   if (screen === 'menu') {
@@ -607,16 +648,30 @@ window.addEventListener('pagehide', saveNow);
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
 
 window.addEventListener('pointerdown', (e) => {
-  if (e.pointerType === 'mouse') return;
+  const { x, y } = viewXY(e);
+  if (e.pointerType === 'mouse') {
+    // the mouse only works the settings and stats screens; everything else is keyboard
+    if (e.button !== 0) return;
+    unlockAudio();
+    if (dragStart(e.pointerId, x, y)) { e.preventDefault(); return; }
+    if (screen === 'settings') settingsTap(x, y);
+    return;
+  }
   e.preventDefault();
   if (!touchMode) { touchMode = true; setTouch(true); }
   unlockAudio();
   goFullscreen();
-  const r = canvas.getBoundingClientRect();
-  if (tapUI(((e.clientX - r.left) / r.width) * VIEW_W, ((e.clientY - r.top) / r.height) * VIEW_H)) return;
+  if (dragStart(e.pointerId, x, y)) return;
+  if (tapUI(x, y)) return;
   pointers.set(e.pointerId, { x: e.clientX, x0: e.clientX, pad: e.clientX < window.innerWidth / 2 });
 }, { passive: false });
 window.addEventListener('pointermove', (e) => {
+  if (drag && e.pointerId === drag.id) {
+    const { x, y } = viewXY(e);
+    if (drag.kind === 'vol') setVolume(volAt(x));
+    else statsScroll = drag.s - (y - drag.y);
+    return;
+  }
   const p = pointers.get(e.pointerId);
   if (!p) return;
   p.x = e.clientX;
@@ -624,7 +679,15 @@ window.addEventListener('pointermove', (e) => {
   if (p.x - p.x0 > SLIDE_MAX) p.x0 = p.x - SLIDE_MAX;
   if (p.x0 - p.x > SLIDE_MAX) p.x0 = p.x + SLIDE_MAX;
 });
-for (const type of ['pointerup', 'pointercancel'] as const) window.addEventListener(type, (e) => pointers.delete(e.pointerId));
+for (const type of ['pointerup', 'pointercancel'] as const) window.addEventListener(type, (e) => {
+  pointers.delete(e.pointerId);
+  if (drag?.id === e.pointerId) drag = null;
+});
+canvas.addEventListener('wheel', (e) => {
+  if (screen !== 'stats') return;
+  e.preventDefault();
+  statsScroll += e.deltaY * (e.deltaMode === 1 ? 16 : 1) * (VIEW_H / canvas.getBoundingClientRect().height);
+}, { passive: false });
 document.addEventListener('contextmenu', (e) => { if (touchMode) e.preventDefault(); });
 
 function touchBits(): number {
@@ -723,7 +786,7 @@ function frame(now: number) {
     drawSettings(ctx, { t: menu.t, vol: settings.vol, volMax: VOL_MAX, keys: settings.keys.map((p) => ACTIONS.map((a) => p[a].map(keyName).join(' / '))), row: set.row, col: set.col, capture: set.capture });
   } else if (screen === 'stats') {
     menu.t += dt;
-    drawStats(ctx, { life, floors: FLOORS.map((f, i) => (i <= floorOf(reach) ? f.name : '')) });
+    statsScroll = drawStats(ctx, { life, floors: FLOORS.map((f, i) => (i <= floorOf(reach) ? f.name : '')), scroll: statsScroll });
   } else if (screen === 'tower') {
     menu.t += dt;
     drawTower(ctx, { t: menu.t, floor: menu.floor, level: menu.level, floors: towerView(floorOf(reach)) });
