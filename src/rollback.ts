@@ -15,6 +15,7 @@
 // all players are enough to replay the session against any future version of this file:
 // see scripts/replay.ts.
 
+import type { Highlights } from './highlights';
 import { IN_PAUSE, step } from './sim';
 import type { GameEvent, Level, State } from './sim';
 
@@ -99,6 +100,8 @@ export class RollbackSession {
   frame = 0;
   confirmedFrame = 0;
   confirmed: State;
+  /** Keeps the game's top moments, from confirmed frames only. */
+  hl?: Highlights;
   predicted: State;
   /** Events from the newest frame only, for visual effects; the caller drains this. */
   events: GameEvent[] = [];
@@ -286,7 +289,10 @@ export class RollbackSession {
     for (let p = 0; p < this.players; p++) if (p !== this.me && this.inputs[p].length < known) known = this.inputs[p].length;
     while (this.confirmedFrame < known) {
       const f = this.confirmedFrame;
-      step(this.confirmed, this.inputsAt(f), this.levels, ev);
+      const inp = this.inputsAt(f);
+      this.hl?.before(this.confirmed);
+      step(this.confirmed, inp, this.levels, ev);
+      this.hl?.after(this.confirmed, inp);
       const played = this.early.get(f);
       for (const e of ev) {
         const k = played ? played.indexOf(soundKey(e)) : -1;

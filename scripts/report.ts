@@ -85,7 +85,9 @@ for (const r of recs) {
   const seen = new Set<number>();
   for (const [lv, ticks, result, lost] of r.hist) {
     // v18 put Photo Finish in at tower level 8: older tower records count from the old layout
-    const level = r.set === 'tower' && r.version < 18 && lv >= 7 ? lv + 1 : lv;
+    let level = r.set === 'tower' && r.version < 18 && lv >= 7 ? lv + 1 : lv;
+    // v21 put Every Shot Counts in at tower level 35 (index 34)
+    if (r.set === 'tower' && r.version < 21 && level >= 34) level++;
     const k = `${r.set}:${level}`;
     let a = agg.get(k);
     if (!a) { a = { games: 0, attempts: 0, clears: 0, firstTries: 0, firstClears: 0, clearTimes: [], lost: 0, quits: 0, solo: [0, 0], group: [0, 0] }; agg.set(k, a); }

@@ -1,5 +1,5 @@
 import { FLOORS, FLOOR_START } from './levels';
-import { MODES } from './sim';
+import { MODES, PICKUP_KINDS } from './sim';
 import type { State } from './sim';
 
 // Lifetime stats, kept in this browser alongside the tower progress.
@@ -23,9 +23,11 @@ export interface Lifetime {
   bestFloor: number[];
   /** How many players and which mode that fastest clear was in. */
   bestFloorBy: string[];
+  /** Every kind of drop ever picked up (PickupKind names). */
+  drops: string[];
 }
 
-const blank = (): Lifetime => ({ playSecs: 0, games: 0, onlineGames: 0, pops: 0, deaths: 0, shots: 0, picks: 0, levelsCleared: 0, floorsCleared: 0, bestClimb: 0, bestFloor: FLOORS.map(() => 0), bestFloorBy: FLOORS.map(() => '') });
+const blank = (): Lifetime => ({ playSecs: 0, games: 0, onlineGames: 0, pops: 0, deaths: 0, shots: 0, picks: 0, levelsCleared: 0, floorsCleared: 0, bestClimb: 0, bestFloor: FLOORS.map(() => 0), bestFloorBy: FLOORS.map(() => ''), drops: [] });
 
 export const life: Lifetime = blank();
 try {
@@ -59,6 +61,7 @@ function commit() {
     life.deaths += p.st.deaths - b.deaths;
     life.shots += p.st.shots - b.shots;
     life.picks += p.st.picks - b.picks;
+    PICKUP_KINDS.forEach((k, bit) => { if (p.st.got & (1 << bit) && !life.drops.includes(k)) life.drops.push(k); });
     base.players[i] = { pops: p.st.pops, deaths: p.st.deaths, shots: p.st.shots, picks: p.st.picks };
   }
   if (s.mode !== 'versus') life.levelsCleared += s.hist.slice(base.hist).filter((h) => h[2] === 1).length;

@@ -31,7 +31,7 @@ Picked on the menu, or by the host in an online lobby.
 | Versus | Each player gets their own lane (the level set is ignored; rounds are generated). When you pop a ball, its first piece stays and the rest drop into random rivals' lanes. Clear your lane first, or be the last one standing, to win the round. First to 3 rounds wins. |
 | Tethered | Players are roped to their neighbours and can't get more than 170 px apart. In every roped mode a **rope master** pickup can drop: its holder drags neighbours along instead of being held back. |
 | Two Heads | Players pair up in one body: one moves, the other shoots, and they swap every level. An odd player out plays alone. |
-| Revive | The team shares 3 lives. A hit player waits in a small circle for 15 seconds; a teammate standing in it for 1.5 s brings them back. If time runs out, the whole team goes down and loses a life. Every player must be up for a level to count as cleared. |
+| Revive | The team shares 3 lives. A hit player waits in a small circle for 15 seconds, and longer early in a level: the first fall of an attempt at a level waits 60 s, the second 30 s, every one after that 15 s; a teammate standing in it for 1.5 s brings them back. If time runs out, the whole team goes down and loses a life. Every player must be up for a level to count as cleared. |
 
 Except in Revive, each player has their own 3 lives. A hit sits you out until the level is cleared or
 restarts; the level restarts once everyone is down. Single-player games are always Classic.
@@ -46,7 +46,7 @@ All 57 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each f
 | 2 | The Workshop | 8: gates, drops, a descending roof |
 | 3 | Portal Gallery | 6: portals, balls that bounce on the spot |
 | 4 | Split Level | 7: balls that split into 3 and 4 (the number on a ball is how many pieces) |
-| 5 | The Armoury | 5: odd weapons (below) |
+| 5 | The Armoury | 6: odd weapons (below), and Every Shot Counts: a harpoon, vine or rocket that reaches the roof without hitting a ball costs a life (level flag `noMiss`; the roof glows red) |
 | 6 | Heavy Weather | 7: armour, wind, gravity flips |
 | 7 | Machine Room | 6: spin, moving blocks, crushers |
 | 8 | Overclocked | 6: speed and cursed drops |
@@ -74,9 +74,16 @@ Weapons beyond the harpoon, twin harpoon, sticky vine, pulse gun and beam:
 | Rocket | The same, straight up, and wide (18 px). Drops in ordinary levels too. |
 | Lance | One thin 96 px bar of light at a time, travelling up. Drops in ordinary levels too. |
 
-On the dev server, `?reach=20` opens the map as if level 20 had been reached, and `?play=tower-17` jumps into a level. Neither saves.
+On the dev server, `?reach=20` opens the map as if level 20 had been reached, and `?play=tower-17` jumps into a level. Neither saves. On any build, pressing Backspace three times quickly on the menu or the tower picker opens every level for the session (marked DEV, saves no progress).
 
 The pause screen lists every mode's rules. The results screen ranks every player on three awards: **Most reckless** (time spent within 16 px of a ball), **Closest shave** (smallest gap to a ball that didn't hit you) and **Sharpshooter** (pops per shot).
+
+The results screen also has:
+
+- **Top moments** (M): the three tensest stretches of the game, picked by how close balls came to standing players (and anyone going down), each replayed from a snapshot plus the recorded inputs (`src/highlights.ts`; online it records the confirmed frames). Pick one to watch it full size; **G** saves it as a 480×270 GIF (`gifenc`, loaded only when needed). Where the browser has a share sheet, a second press shares the GIF.
+- **Share** (C): the results as a 1200×675 picture (`drawShareCard`) through the share sheet, else copied to the clipboard, else downloaded.
+
+**Drops** on the menu shows every kind of drop; ones never picked up stay hidden. Picked-up kinds are kept in the lifetime stats (`drops`), from a bitmask each player carries through the game (`st.got`).
 
 ## How online play works
 

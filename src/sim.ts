@@ -44,6 +44,8 @@ export type Weapon = 'harpoon' | 'twin' | 'anchor' | 'pulse' | 'beam' | 'stub' |
 /** 'haste' is a curse: it makes you run much faster than you can control for a while. */
 /** 'master' (roped modes only): the holder can drag their neighbours along by the rope. */
 export type PickupKind = Weapon | 'shield' | 'slow' | 'time' | 'life' | 'haste' | 'master';
+/** Every drop, in the order the drops page shows them. A player's `st.got` has bit i set once they've picked up PICKUP_KINDS[i]. */
+export const PICKUP_KINDS: PickupKind[] = ['harpoon', 'twin', 'anchor', 'stub', 'pulse', 'beam', 'sword', 'side', 'rocket', 'lance', 'shield', 'slow', 'time', 'life', 'haste', 'master'];
 
 export interface BallDef { x: number; y: number; size: number; dir: 1 | -1; fast?: boolean; group?: number; /** Pieces it pops into (default: the level's `split`, else 2). */ split?: number; /** Bounces straight up and down. */ still?: boolean; /** Hits needed before it will pop; each hit punts it upward instead. */ armor?: number }
 export interface RectDef {
@@ -67,6 +69,8 @@ export interface Level {
   spikes?: boolean;
   /** Weapon everyone starts the level with. */
   weapon?: Weapon;
+  /** No misses: a harpoon, vine or rocket that reaches the roof (or a block) without hitting a ball costs its owner a life. */
+  noMiss?: boolean;
   drops?: PickupKind[];
   dropRate?: number;
   /** Ball speed multiplier gained per second. */
@@ -109,10 +113,12 @@ export const MODES: { id: Mode; name: string; hint: string }[] = [
   { id: 'versus', name: 'Versus', hint: 'Each player gets a lane. Balls you pop split into your rivals\' lanes. Clear yours first; first to 3 rounds wins.' },
   { id: 'tethered', name: 'Tethered', hint: 'Players are roped together and can only get so far apart.' },
   { id: 'duo', name: 'Two Heads', hint: 'Two players, one body: one moves, one shoots. You swap every level.' },
-  { id: 'revive', name: 'Revive', hint: 'Shared lives. Revive a fallen teammate by standing in their circle within 15 s. All must be up to finish.' },
+  { id: 'revive', name: 'Revive', hint: 'Shared lives. Revive a fallen teammate by standing in their circle before their time runs out. All must be up to finish.' },
 ];
 /** Revive mode: how long a fallen player waits, the size of their circle, and how long reviving takes. */
 export const REVIVE_TICKS = 15 * 60;
+/** How fast a fallen player's revive timer runs: the first fall of a level drains at 1/4 speed, the second at 1/2, then full speed. */
+export const REVIVE_RATES = [0.25, 0.5, 1];
 export const REVIVE_R = 34;
 export const REVIVE_NEED = 90;
 /** Roped modes: longest the rope between neighbouring players can stretch. */
@@ -135,7 +141,9 @@ export interface PlayerStats { pops: number; score: number; alive: number; death
   danger: number;
   /** Smallest gap, in px, between a ball and this player that didn't hit them ("closest shave"). */
   shave: number;
-  revives: number }
+  revives: number;
+  /** Drops picked up this game, one bit per PICKUP_KINDS entry. */
+  got: number }
 
 export interface Player { x: number; face: number; weapon: Weapon; cd: number; shield: boolean; invuln: number;
   /** Allowed to shoot (always true in classic). */
@@ -149,9 +157,10 @@ export interface Player { x: number; face: number; weapon: Weapon; cd: number; s
   down: boolean;
   /** Haste curse: ticks left. */
   haste: number;
-  /** Revive mode, while down: ticks left to be revived, and revive progress. */
+  /** Revive mode, while down: ticks left to be revived, revive progress, and how fast the timer drains (REVIVE_RATES). */
   rt: number;
   rp: number;
+  rr: number;
   /** Versus: rounds won. */
   wins: number;
   /** Roped modes: holds the rope and can drag neighbours along. */
@@ -190,6 +199,8 @@ export interface State {
   lost: number;
   /** Revive mode: the team's shared lives. */
   team: number;
+  /** Revive mode: falls so far on this attempt at the level (sets how fast the next revive timer drains). */
+  falls: number;
 }
 
 export type GameEvent =
@@ -265,11 +276,11 @@ export function newGame(levels: Level[], numPlayers: number, startLevel = 0, see
   const s: State = {
     tick: 0, paused: false, rng: seed | 0, level: startLevel, phase: 'ready', phaseT: 0, score: 0,
     timeLeft: 0, ceilY: 0, speed: 1, slowT: 0, lt: 0, grav: 1, balls: [], rects: [], shots: [], pickups: [],
-    players: [], mode: numPlayers > 1 ? mode : 'classic', hist: [], lost: 0, team: 3,
+    players: [], mode: numPlayers > 1 ? mode : 'classic', hist: [], lost: 0, team: 3, falls: 0,
   };
   for (let i = 0; i < numPlayers; i++) s.players.push({ x: W / 2, face: 1, weapon: 'harpoon', cd: 0, shield: false, invuln: 0, lives: 3, down: false,
-    armed: true, vip: false, haste: 0, rt: 0, rp: 0, wins: 0, master: false, ride: -1,
-    st: { pops: 0, score: 0, alive: 0, deaths: 0, shots: 0, picks: 0, danger: 0, shave: 999, revives: 0 } });
+    armed: true, vip: false, haste: 0, rt: 0, rp: 0, rr: 1, wins: 0, master: false, ride: -1,
+    st: { pops: 0, score: 0, alive: 0, deaths: 0, shots: 0, picks: 0, danger: 0, shave: 999, revives: 0, got: 0 } });
   if (s.mode === 'versus') s.level = 0;
   loadLevel(s, levels);
   return s;
@@ -280,6 +291,7 @@ function loadLevel(s: State, levels: Level[]) {
   s.balls = L.balls.map((b) => ({ x: b.x, y: b.y, vx: b.still ? 0 : b.dir * VX, vy: 0, size: b.size, fast: !!b.fast, group: b.group ?? 0, immune: 0, armor: b.armor ?? 0, split: b.split ?? L.split ?? 2, pcd: 0 }));
   s.rects = (L.rects ?? []).map((r) => ({ ...r, bx: r.x, by: r.y }));
   s.lt = 0;
+  s.falls = 0;
   s.grav = 1;
   s.shots = [];
   s.pickups = [];
@@ -468,12 +480,14 @@ function boxHit(b: Ball, x0: number, x1: number, y0: number, y1: number): boolea
   return dx * dx + dy * dy < r * r;
 }
 
-function stepShots(s: State, L: Level, ev: GameEvent[]) {
+/** Moves the shots. Returns the owners of shots that missed on a no-miss level. */
+function stepShots(s: State, L: Level, ev: GameEvent[]): number[] {
   const spikes = hasSpikes(L);
+  const missed: number[] = [];
   for (let i = s.shots.length - 1; i >= 0; i--) {
     const sh = s.shots[i];
     const stop = stopY(s, sh.x, spikes);
-    let dead = false;
+    let dead = false, miss = false;
     // most shots are an upright line from y0 down to y1; the sword and the floor bolt are boxes
     let y0 = sh.y, y1 = H, pad = 0, pierce = false, box: number[] | null = null;
     if (sh.kind === 'wire') {
@@ -486,6 +500,7 @@ function stepShots(s: State, L: Level, ev: GameEvent[]) {
         if (sh.y <= top) {
           sh.y = top;
           if (sh.sticky) sh.t = ANCHOR_TICKS; else dead = true;
+          miss = true;
         }
       }
       y0 = sh.y; pad = 1; // a touch wider than it is drawn: a graze counts
@@ -506,7 +521,7 @@ function stepShots(s: State, L: Level, ev: GameEvent[]) {
     } else if (sh.kind === 'darty') {
       sh.v -= DART_ACC * DT;
       sh.y += sh.v * DT;
-      if (sh.y <= stop) dead = true;
+      if (sh.y <= stop) dead = miss = true;
       y0 = sh.y; y1 = sh.y + ROCKET_LEN; pad = ROCKET_HALF; // three times the old width (pad 3)
     } else if (sh.kind === 'lance') {
       sh.y -= LANCE_SPEED * DT;
@@ -515,6 +530,13 @@ function stepShots(s: State, L: Level, ev: GameEvent[]) {
     } else {
       if (--sh.t <= 0) dead = true;
       y0 = stop; pad = 3; pierce = true;
+    }
+    if (miss && L.noMiss) {
+      // reached the top without hitting anything: still checks for a ball on this last tick
+      let grazed = false;
+      for (const b of s.balls) if (b.immune <= 0 && segHit(b, sh.x, y0, y1, pad)) { grazed = true; break; }
+      if (grazed) dead = false; // pops it below
+      else { dead = true; missed.push(sh.owner); }
     }
     if (!dead) {
       for (let j = s.balls.length - 1; j >= 0; j--) {
@@ -535,6 +557,7 @@ function stepShots(s: State, L: Level, ev: GameEvent[]) {
     }
     if (dead) s.shots.splice(i, 1);
   }
+  return missed;
 }
 
 function stepBalls(s: State, L: Level, ev: GameEvent[]) {
@@ -691,7 +714,7 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
     r.x = r.bx + r.move.dx * k;
     r.y = r.by + r.move.dy * k;
   }
-  stepShots(s, L, ev);
+  const missed = stepShots(s, L, ev);
   stepBalls(s, L, ev);
 
   // gates open once every ball of their group is gone
@@ -716,6 +739,7 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
         const p = takers.length === 1 ? takers[0] : takers[Math.floor(rand(s) * takers.length)];
         applyPickup(s, p, pk.kind, L);
         p.st.picks++;
+        p.st.got |= 1 << PICKUP_KINDS.indexOf(pk.kind);
         ev.push({ t: 'pickup', kind: pk.kind });
         s.pickups.splice(i, 1);
       }
@@ -731,7 +755,7 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
     p.down = true;
     p.st.deaths++;
     ev.push({ t: 'die', x: p.x });
-    if (revive) { p.rt = REVIVE_TICKS; p.rp = 0; return; }
+    if (revive) { p.rt = REVIVE_TICKS; p.rp = 0; p.rr = REVIVE_RATES[Math.min(s.falls++, REVIVE_RATES.length - 1)]; return; }
     p.lives--;
     s.lost++;
     // Two Heads: both players in a body go down together
@@ -751,6 +775,8 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
       }
     }
   };
+  // No-miss levels: a shot that reached the top without hitting anything (a shield doesn't help)
+  for (const o of missed) fell(s.players[o]);
   for (const p of s.players) if (!p.down) p.st.alive++;
 
   // Revive mode: stand in a fallen teammate's circle to bring them back before their time runs out
@@ -763,7 +789,7 @@ export function step(s: State, inputs: number[], levels: Level[], ev: GameEvent[
         p.down = false; p.rt = 0; p.rp = 0; p.invuln = 120;
         if (helper) helper.st.revives++;
         ev.push({ t: 'revive', x: p.x });
-      } else if (--p.rt <= 0) {
+      } else if ((p.rt -= p.rr) <= 0) {
         for (const q of s.players) if (!q.down) fell(q); // out of time: the whole team goes down
       }
     }

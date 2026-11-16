@@ -160,6 +160,15 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
       for (let x = 0; x < W; x += 16) { ctx.moveTo(x, s.ceilY); ctx.lineTo(x + 8, s.ceilY + 9); ctx.lineTo(x + 16, s.ceilY); }
       ctx.fill();
     } else ctx.fillRect(0, s.ceilY - 3, W, 3);
+    if (L.noMiss) {
+      // no misses: the roof glows red, a shot that reaches it costs a life
+      const top = s.ceilY + (spiked ? 9 : 0), g = ctx.createLinearGradient(0, top, 0, top + 34);
+      const a = 0.32 + 0.12 * Math.sin(s.tick * 0.08);
+      g.addColorStop(0, `rgba(255,60,60,${a})`);
+      g.addColorStop(1, 'rgba(255,60,60,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, top, W, 34);
+    }
   }
 
   // blocks
@@ -298,7 +307,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
         ctx.lineWidth = 4;
         ctx.beginPath(); ctx.arc(p.x, H - PH / 2, 26, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * p.rp) / REVIVE_NEED); ctx.stroke();
       }
-      text(ctx, `${Math.ceil(p.rt / 60)}`, p.x, H - PH - 44, 14, '#fff');
+      text(ctx, `${Math.ceil(p.rt / p.rr / 60)}`, p.x, H - PH - 44, 14, '#fff');
       ctx.restore();
     });
   }
@@ -621,7 +630,7 @@ function backdrop(ctx: CanvasRenderingContext2D, t: number) {
 }
 
 /** Menu layout (view coordinates): the four rows (Mode, Play, Settings, Stats), the play line, and the selector columns. */
-export const MENU_Y = { rows: [222, 262, 334, 372], hint: 292, go: 430, played: 466, label: 330, lt: 370, gt: 790 };
+export const MENU_Y = { rows: [222, 262, 326, 358, 390], hint: 292, go: 438, played: 470, label: 330, lt: 370, gt: 790 };
 
 export interface MenuView {
   /** The chosen mode needs more players than the chosen way of playing gives. */
@@ -648,7 +657,7 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   });
   const hint = m.gameMode.id === 'classic' ? '' : m.gameMode.hint;
   if (hint) text(ctx, hint, W / 2, Y.hint, 13, '#8a90c7', 'center', 400);
-  ['Settings', 'Stats'].forEach((k, i) => text(ctx, k, W / 2, Y.rows[2 + i], 20, m.row === 2 + i ? '#ffd43b' : '#8a90c7'));
+  ['Settings', 'Stats', 'Drops'].forEach((k, i) => text(ctx, k, W / 2, Y.rows[2 + i], 20, m.row === 2 + i ? '#ffd43b' : '#8a90c7'));
   if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players`, W / 2, Y.go, 18, '#ff8787');
   else text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, Y.go, touch ? 26 : 22, '#8ce99a');
   if (m.playSecs >= 60) text(ctx, `${longTime(m.playSecs)} played`, W / 2, Y.played, 13, '#5b6090', 'center', 400);
@@ -799,6 +808,8 @@ export interface TowerView {
   floors: { name: string; locked: boolean; levels: string[] }[];
   floor: number; // selected floor
   level: number; // selected level on it; 0 = climb from the checkpoint, anything else is practice
+  /** Developer picker on: every level open, nothing saved. */
+  dev?: boolean;
 }
 
 /** The tower itself: one slab per floor, top floor at the top. `marks` puts a player-coloured pip on the floor each player has reached. */
@@ -860,6 +871,7 @@ export function drawTower(ctx: CanvasRenderingContext2D, v: TowerView) {
     text(ctx, String(k + 1), U.listX, y, 15, '#8a90c7', 'left', 400);
     text(ctx, name || '? ? ?', U.listX + 28, y, 17, on ? '#ffd43b' : name ? '#e8eaf6' : '#5b6090', 'left', on ? 700 : 400);
   });
+  if (v.dev) text(ctx, 'DEV: all levels open, nothing saved', U.cx - U.w / 2, 16, 12, '#ff6b6b', 'left', 700);
   const go = v.level ? 'practice' : 'climb';
   text(ctx, touch ? `TAP HERE TO ${go.toUpperCase()}` : `Enter: ${go}`, U.listX, U.goY, 22, '#8ce99a', 'left');
   if (touch) closeButton(ctx);
@@ -1104,7 +1116,9 @@ export interface ResultsView { s: State; you: number; levels: Level[]; online: b
   /** Which award's (?) is being hovered or was tapped, or -1. */
   help: number;
   /** Where going back leads: 'lobby', 'tower' or 'menu'. */
-  back: string }
+  back: string;
+  /** A short note after sharing ('copied', 'saved'), or ''. */
+  note: string }
 
 /** Height of the play again / back line on the results screen. */
 export const RESULTS_BTN_Y = H + 20;
@@ -1195,10 +1209,156 @@ export function drawResults(ctx: CanvasRenderingContext2D, v: ResultsView) {
     ctx.strokeRect(bx, by, bw, bh);
     lines.forEach((l, i) => text(ctx, l, bx + 12, by + 18 + i * 18, 13, '#e8eaf6', 'left', 400));
   }
-  const back = v.back === 'tower' ? 'choose floor' : v.back;
-  if (v.online) text(ctx, touch ? 'TAP TO CONTINUE' : 'Enter: back to the lobby', W / 2, RESULTS_BTN_Y, touch ? 22 : 16, '#8ce99a');
-  else if (touch) {
-    text(ctx, 'PLAY AGAIN', W * 0.3, RESULTS_BTN_Y, 24, '#8ce99a');
-    text(ctx, back.toUpperCase(), W * 0.7, RESULTS_BTN_Y, 24, '#cfd4ff');
-  } else text(ctx, `Enter: play again      Esc: ${back}`, W / 2, RESULTS_BTN_Y, 16, '#8ce99a');
+  resultsActions(v.online, v.back).forEach((a, k, all) => {
+    const x = (W * (k + 0.5)) / all.length, col = a.id === 'again' || a.id === 'back' && v.online ? '#8ce99a' : '#cfd4ff';
+    text(ctx, touch ? a.label.toUpperCase() : `${a.key}: ${a.label}`, x, RESULTS_BTN_Y, touch ? 20 : 15, col);
+  });
+  if (v.note) text(ctx, v.note, W / 2, RESULTS_BTN_Y + 26, 13, '#ffd43b', 'center', 400);
+}
+
+/** The actions along the bottom of the results screen, left to right (each gets an equal share of the width). */
+export function resultsActions(online: boolean, back: string): { id: 'again' | 'moments' | 'share' | 'back'; key: string; label: string }[] {
+  const where = back === 'tower' ? 'choose floor' : back === 'lobby' ? 'lobby' : 'menu';
+  return [
+    ...(online ? [] : [{ id: 'again' as const, key: 'Enter', label: 'play again' }]),
+    { id: 'moments', key: 'M', label: 'top moments' },
+    { id: 'share', key: 'C', label: 'share' },
+    { id: 'back', key: online ? 'Enter' : 'Esc', label: where },
+  ];
+}
+
+/** The drops page: every kind of drop, the ones never picked up still hidden. */
+export function drawDrops(ctx: CanvasRenderingContext2D, v: { t: number; kinds: PickupKind[]; found: string[] }) {
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = '#07080f';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  text(ctx, 'DROPS', 40, 50, 30, '#fff', 'left');
+  const got = v.kinds.filter((k) => v.found.includes(k)).length;
+  text(ctx, `${got} / ${v.kinds.length}`, W - 40, 50, 20, got === v.kinds.length ? '#ffd43b' : '#8a90c7', 'right');
+  // ten weapons in two rows, then the six other drops
+  const weapons = v.kinds.slice(0, 10), items = v.kinds.slice(10);
+  const rows: [PickupKind[], number][] = [[weapons.slice(0, 5), 150], [weapons.slice(5), 256], [items, 402]];
+  text(ctx, 'WEAPONS', 40, 98, 12, '#ffa94d', 'left');
+  text(ctx, 'OTHERS', 40, 346, 12, '#ffa94d', 'left');
+  let n = 0;
+  for (const [kinds, y] of rows) {
+    kinds.forEach((k, i) => {
+      const x = 40 + ((W - 80) * (i + 0.5)) / kinds.length, has = v.found.includes(k);
+      if (has) {
+        drawToken(ctx, k, x, y + Math.sin(v.t * 2 + n) * 2, 26);
+        text(ctx, PICK[k].name, x, y + 46, 14, '#e8eaf6', 'center', 600);
+      } else {
+        ctx.fillStyle = '#10122a';
+        ctx.beginPath(); ctx.arc(x, y, 26, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#2b2f55';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        text(ctx, '?', x, y + 1, 20, '#2b2f55');
+        text(ctx, '? ? ?', x, y + 46, 14, '#3b4070', 'center', 600);
+      }
+      n++;
+    });
+  }
+  if (touch) closeButton(ctx);
+  else text(ctx, 'Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
+}
+
+/** Top moments: three small looping replays side by side. */
+export const MOMENTS_UI = { y: 120, w: 280, h: 158, gap: 24 };
+export const momentX = (k: number) => W / 2 + (k - 1) * (MOMENTS_UI.w + MOMENTS_UI.gap);
+
+export function drawMoments(ctx: CanvasRenderingContext2D, v: { t: number; sel: number; thumbs: CanvasImageSource[]; labels: string[] }) {
+  backdrop(ctx, v.t);
+  ctx.fillStyle = 'rgba(7,8,15,0.75)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  text(ctx, 'TOP MOMENTS', 40, 50, 30, '#fff', 'left');
+  const U = MOMENTS_UI;
+  if (!v.thumbs.length) text(ctx, 'Too calm.', W / 2, U.y + U.h / 2, 20, '#5b6090');
+  v.thumbs.forEach((img, k) => {
+    const x = momentX(k) - U.w / 2, on = k === v.sel;
+    ctx.drawImage(img, x, U.y, U.w, U.h);
+    ctx.strokeStyle = on ? '#ffd43b' : '#2b2f55';
+    ctx.lineWidth = on ? 3 : 1;
+    ctx.strokeRect(x, U.y, U.w, U.h);
+    text(ctx, `#${k + 1}`, x, U.y + U.h + 24, 18, on ? '#ffd43b' : '#8a90c7', 'left');
+    text(ctx, v.labels[k], x + 40, U.y + U.h + 24, 14, on ? '#fff' : '#cfd4ff', 'left', 600);
+  });
+  if (touch) { closeButton(ctx); if (v.thumbs.length) text(ctx, 'TAP ONE TO WATCH', W / 2, 420, 18, '#8ce99a'); }
+  else text(ctx, v.thumbs.length ? '< >: pick   Enter: watch   Esc: back' : 'Esc: back', W / 2, H + 44, 13, '#8a90c7', 'center', 400);
+}
+
+/** Over a full-size replay: a REPLAY tag, and saving it as a GIF. `gif`: progress 0..1 while one is being made, else -1. */
+export const REPLAY_GIF_BTN = { x: W / 2, y: 20, halfW: 120 };
+export function drawReplayBar(ctx: CanvasRenderingContext2D, v: { t: number; gif: number; note: string }) {
+  ctx.fillStyle = 'rgba(7,8,15,0.45)';
+  ctx.fillRect(0, 0, W, 40);
+  if (Math.floor(v.t * 2) % 2 === 0) { ctx.fillStyle = '#ff6b6b'; ctx.beginPath(); ctx.arc(28, 20, 6, 0, Math.PI * 2); ctx.fill(); }
+  text(ctx, 'REPLAY', 42, 20, 16, '#fff', 'left');
+  const label = v.gif >= 0 ? `making GIF ${Math.round(v.gif * 100)}%` : v.note || (touch ? 'SAVE GIF' : 'G: save GIF');
+  text(ctx, label, REPLAY_GIF_BTN.x, REPLAY_GIF_BTN.y, 16, v.gif >= 0 ? '#ffd43b' : '#8ce99a');
+  if (touch) closeButton(ctx);
+  else text(ctx, 'Esc: back', W - 24, 20, 14, '#8a90c7', 'right', 400);
+}
+
+/** The picture to share after a game: drawn in view coordinates (VIEW_W x VIEW_H); scale the context for a bigger image. */
+export function drawShareCard(ctx: CanvasRenderingContext2D, v: { s: State; levels: Level[]; you: number; url: string }) {
+  backdrop(ctx, 7.3);
+  ctx.fillStyle = 'rgba(7,8,15,0.55)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const s = v.s, L = levelAt(s, v.levels), P = s.players, n = P.length;
+  const mode = MODES.find((m) => m.id === s.mode)!.name;
+  text(ctx, 'OVERPOPPED', 40, 44, 26, '#fff', 'left');
+  text(ctx, `${n === 1 ? 'Solo' : `${n} players`}${s.mode === 'classic' ? '' : ` · ${mode}`}`, W - 40, 44, 16, '#cfd4ff', 'right', 600);
+
+  let [title, col] = s.phase === 'won' ? ['YOU WIN', '#ffd43b'] : ['GAME OVER', '#ff6b6b'];
+  if (s.mode === 'versus') {
+    const top = Math.max(...P.map((p) => p.wins)), best = P.map((p, i) => (p.wins === top ? i : -1)).filter((i) => i >= 0);
+    if (best.length === 1) [title, col] = [`${COLOR_NAMES[best[0]].toUpperCase()} WINS`, PLAYER_COL[best[0]]];
+  }
+  text(ctx, title, W / 2, 124, 60, col);
+  const floor = L?.floor ? FLOORS[L.floor - 1] : null;
+  const where = s.mode === 'versus' ? `${s.level + 1} rounds`
+    : floor ? `Floor ${L.floor} · ${floor.name}   ·   Level ${s.level - FLOOR_START[L.floor! - 1] + 1}: ${L.name}`
+    : `Level ${s.level + 1}: ${L?.name ?? ''}`;
+  text(ctx, where, W / 2, 178, 18, '#e8eaf6', 'center', 600);
+
+  // four big numbers for the whole team
+  const sum = (f: (i: number) => number) => P.reduce((a, _, i) => a + f(i), 0);
+  const pops = sum((i) => P[i].st.pops), shots = sum((i) => P[i].st.shots);
+  const ticks = s.hist.reduce((a, h) => a + h[1], 0);
+  const tiles: [string, string][] = [
+    ['POPPED', pops.toLocaleString()],
+    ['ACCURACY', shots >= 10 ? `${Math.round((100 * pops) / shots)}%` : '-'],
+    ['TIME', clock(ticks / 60)],
+    ['SCORE', s.score.toLocaleString()],
+  ];
+  const tw = 196, tg = 20, tx0 = W / 2 - (tiles.length * tw + (tiles.length - 1) * tg) / 2;
+  tiles.forEach(([k, val], i) => {
+    const x = tx0 + i * (tw + tg);
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.beginPath(); ctx.roundRect(x, 220, tw, 100, 12); ctx.fill();
+    text(ctx, k, x + tw / 2, 246, 13, '#8a90c7');
+    text(ctx, val, x + tw / 2, 288, 36, '#fff');
+  });
+
+  // the three awards, with who took each when there's more than one player
+  const acc = (i: number) => (P[i].st.shots >= 10 ? P[i].st.pops / P[i].st.shots : -1);
+  const awards: [string, (i: number) => number, (x: number) => string, boolean][] = [
+    ['MOST RECKLESS', (i) => P[i].st.danger, (x) => `${(x / 60).toFixed(1)} s`, false],
+    ['CLOSEST SHAVE', (i) => P[i].st.shave, (x) => (x < 16 ? `${x.toFixed(1)} px` : '-'), true],
+    ['SHARPSHOOTER', acc, (x) => (x < 0 ? '-' : `${Math.round(x * 100)}%`), false],
+  ];
+  awards.forEach(([h, get, show, low], k) => {
+    const x = W / 2 + (k - 1) * 290;
+    const best = P.map((_, i) => i).sort((i, j) => (low ? get(i) - get(j) : get(j) - get(i)) || i - j)[0];
+    text(ctx, h, x, 360, 13, '#ffa94d');
+    text(ctx, show(get(best)), x, 392, 24, '#fff');
+    if (n > 1) text(ctx, COLOR_NAMES[best][0].toUpperCase() + COLOR_NAMES[best].slice(1), x, 420, 14, PLAYER_COL[best % PLAYER_COL.length], 'center', 600);
+  });
+
+  ctx.fillStyle = '#1a1236';
+  ctx.fillRect(0, H, W, 60);
+  text(ctx, v.url, W / 2, H + 30, 18, '#8ce99a');
 }

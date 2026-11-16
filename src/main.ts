@@ -5,14 +5,17 @@ import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
 import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveNow, watchGame } from './stats';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
+import { MOMENTS_UI, REPLAY_GIF_BTN, drawDrops, drawMoments, drawReplayBar, drawShareCard, momentX, resultsActions } from './render';
 import { AWARD_UI, RESULTS_BTN_Y, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawSettings, drawStats, drawTower, SET_UI, STATS_UI, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
-import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
+import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, PICKUP_KINDS, levelAt, newGame, step } from './sim';
+import { Highlights } from './highlights';
+import type { Clip } from './highlights';
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 20;
+const VERSION = 21;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
@@ -34,7 +37,7 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
 
 // ---------------------------------------------------------------- state
-type Screen = 'menu' | 'tower' | 'lobby' | 'game' | 'results' | 'stats' | 'settings';
+type Screen = 'menu' | 'tower' | 'lobby' | 'game' | 'results' | 'stats' | 'settings' | 'drops' | 'moments' | 'replay';
 let screen: Screen = 'menu';
 let levels: Level[] = TOWER;
 let game: State | null = null; // local play
@@ -43,7 +46,9 @@ let sessionT0 = 0;
 let gameSet = TOWER_SET; // level set of the local game
 let practice = false; // the local game started mid-floor: it saves no progress
 /** End-of-game stats being shown, and where to go after. */
-let results: { s: State; set: number; you: number; online: boolean } | null = null;
+let results: { s: State; set: number; you: number; online: boolean; moments: Clip[] } | null = null;
+/** Records the top moments of the local game being played (online, the session has its own). */
+let hl: Highlights | null = null;
 let pausePulse = false; // send IN_PAUSE on the next tick
 const keys = new Set<string>();
 // One of these shows under the title, a different one each time the menu comes back.
@@ -212,6 +217,7 @@ function beginSession(m: StartMsg) {
   net.me = me;
   net.meta = { version: VERSION, gid: m.gid, set: m.set, level: m.level, seed: m.seed, date: new Date().toISOString(), inputDelay: INPUT_DELAY, players: m.seats.length, mode: m.gm };
   session = new RollbackSession(levels, me, newGame(levels, m.seats.length, m.level, m.seed, m.gm), (to, msg) => room.send(m.seats[to], { ...msg, gid: m.gid }));
+  session.hl = new Highlights();
   sessionT0 = performance.now();
   gameStarted(true);
   acc = 0;
@@ -269,7 +275,10 @@ function endSession() {
 }
 
 function showResults(s: State, set: number, you: number, online: boolean) {
-  results = { s: JSON.parse(JSON.stringify(s)), set, you, online };
+  const moments = (session?.hl ?? hl)?.finish() ?? [];
+  hl = null;
+  results = { s: JSON.parse(JSON.stringify(s)), set, you, online, moments };
+  note = { text: '', until: 0 };
   gameEnded();
   awardHelp = -1;
   screen = 'results';
@@ -288,6 +297,153 @@ function closeResults() {
   results = null;
 }
 
+// ---- Sharing, top moments and their replays ----
+
+/** A short note on the results or replay screen ('Image copied'...), shown until `until` (performance.now()). */
+let note = { text: '', until: 0 };
+const flash = (text: string, ms = 2500) => { note = { text, until: performance.now() + ms }; };
+const gameUrl = () => location.origin + location.pathname;
+
+function download(blob: Blob, name: string) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+/** The share sheet where there is one; else the clipboard (images only), else a download. */
+function shareFile(blob: Blob, name: string) {
+  const file = new File([blob], name, { type: blob.type });
+  if (navigator.canShare?.({ files: [file] })) {
+    navigator.share({ files: [file], text: `Overpopped ${gameUrl()}` }).catch(() => {});
+    return;
+  }
+  if (blob.type === 'image/png' && navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(() => flash('Image copied'), () => { download(blob, name); flash('Image saved'); });
+    return;
+  }
+  download(blob, name);
+  flash(blob.type === 'image/gif' ? 'GIF saved' : 'Image saved');
+}
+
+/** The results as a picture (1200 x 675), shared at once so the share sheet still counts as a response to the key or tap. */
+function shareCard() {
+  if (!results) return;
+  const c = document.createElement('canvas');
+  c.width = 1200; c.height = 675;
+  const x = c.getContext('2d')!;
+  x.scale(c.width / VIEW_W, c.height / VIEW_H);
+  drawShareCard(x, { s: results.s, levels: SETS[results.set].levels, you: results.you, url: gameUrl().replace(/^https?:\/\//, '').replace(/\/$/, '') });
+  const bin = atob(c.toDataURL('image/png').split(',')[1]), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  shareFile(new Blob([bytes], { type: 'image/png' }), 'overpopped.png');
+}
+
+/** A moment being replayed: the state, how far through its inputs, and a pause at the end before it loops. */
+interface Replay { clip: Clip; s: State; i: number; hold: number }
+const newReplay = (clip: Clip): Replay => ({ clip, s: JSON.parse(clip.snap), i: 0, hold: 0 });
+const replayEv: GameEvent[] = [];
+
+/** One tick of a replay (paused stretches are skipped). `fx`: with sound and particles. */
+function advanceReplay(r: Replay, fx: boolean) {
+  if (r.i >= r.clip.inputs.length) {
+    if (++r.hold > 60) Object.assign(r, newReplay(r.clip));
+    return;
+  }
+  const lv = SETS[results!.set].levels;
+  do step(r.s, r.clip.inputs[r.i++], lv, replayEv);
+  while (r.s.paused && r.i < r.clip.inputs.length);
+  if (fx) { playEvents(replayEv); fxEvents(replayEv); }
+  replayEv.length = 0;
+}
+
+function drawReplayFrame(c: CanvasRenderingContext2D, r: Replay, dt: number) {
+  const lv = SETS[results!.set].levels, paused = r.s.paused;
+  r.s.paused = false; // a game quit from the pause screen still shows the action, not PAUSED
+  drawGame(c, r.s, levelAt(r.s, lv), where(r.s), dt);
+  r.s.paused = paused;
+}
+
+/** The moments screen: a small looping replay of each, and which is picked. The full-size replay plays `play`. */
+const mom = { sel: 0, thumbs: [] as { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; r: Replay }[], labels: [] as string[], play: null as Replay | null, acc: 0, ready: null as Blob | null };
+
+function openMoments() {
+  if (!results) return;
+  const lv = SETS[results.set].levels;
+  mom.thumbs = results.moments.map((clip) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = VIEW_W / 2; canvas.height = VIEW_H / 2;
+    const c = canvas.getContext('2d')!;
+    c.scale(0.5, 0.5);
+    return { canvas, ctx: c, r: newReplay(clip) };
+  });
+  mom.labels = mom.thumbs.map((t) => levelAt(t.r.s, lv)?.name ?? '');
+  mom.sel = 0;
+  screen = 'moments';
+}
+
+function momentsKey(code: string) {
+  const n = mom.thumbs.length;
+  if (code === 'Escape') screen = 'results';
+  else if (code === 'ArrowLeft' && n) mom.sel = (mom.sel + n - 1) % n;
+  else if (code === 'ArrowRight' && n) mom.sel = (mom.sel + 1) % n;
+  else if ((code === 'Enter' || code === 'Space') && n) {
+    mom.play = newReplay(mom.thumbs[mom.sel].r.clip);
+    mom.acc = 0;
+    mom.ready = null;
+    note = { text: '', until: 0 };
+    screen = 'replay';
+  }
+}
+
+/** Making a GIF of the moment on screen: progress 0..1. */
+let gif: { pct: number } | null = null;
+
+/** Save the replayed moment as a GIF (480 x 270, 20 frames a second). Where the GIF has to go
+ *  through the share sheet, that needs a fresh key or tap once it's made: the second press shares it. */
+async function saveGif() {
+  if (gif || !mom.play || !results) return;
+  if (mom.ready) { shareFile(mom.ready, 'overpopped-moment.gif'); mom.ready = null; note = { text: '', until: 0 }; return; }
+  gif = { pct: 0 };
+  try {
+    const { GIFEncoder, quantize, applyPalette } = await import('gifenc');
+    const lv = SETS[results.set].levels, clip = mom.play.clip, s: State = JSON.parse(clip.snap), ev: GameEvent[] = [];
+    const big = document.createElement('canvas'), small = document.createElement('canvas');
+    big.width = VIEW_W; big.height = VIEW_H; small.width = VIEW_W / 2; small.height = VIEW_H / 2;
+    const bc = big.getContext('2d')!, sc = small.getContext('2d', { willReadFrequently: true })!;
+    const enc = GIFEncoder();
+    let frames = 0, last: { index: Uint8Array; palette: number[][] } | null = null;
+    for (let i = 0; i < clip.inputs.length; i++) {
+      step(s, clip.inputs[i], lv, ev);
+      fxEvents(ev);
+      ev.length = 0;
+      if (s.paused || frames++ % 3) continue;
+      drawGame(bc, s, levelAt(s, lv), where(s), DT * 3);
+      sc.drawImage(big, 0, 0, small.width, small.height);
+      sc.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+      sc.textAlign = 'right'; sc.textBaseline = 'top'; sc.fillStyle = 'rgba(255,255,255,0.6)';
+      sc.fillText('OVERPOPPED', small.width - 6, 6);
+      const data = sc.getImageData(0, 0, small.width, small.height).data;
+      const palette = quantize(data, 256), index = applyPalette(data, palette);
+      enc.writeFrame(index, small.width, small.height, { palette, delay: 50 });
+      last = { index, palette };
+      if (frames % 24 === 0) { gif.pct = i / clip.inputs.length; await new Promise((r) => setTimeout(r, 0)); }
+    }
+    if (last) enc.writeFrame(last.index, small.width, small.height, { palette: last.palette, delay: 1500 }); // hold the end
+    enc.finish();
+    const blob = new Blob([enc.bytes()], { type: 'image/gif' });
+    if (navigator.canShare?.({ files: [new File([blob], 'overpopped-moment.gif', { type: 'image/gif' })] })) {
+      mom.ready = blob;
+      flash(touchMode ? 'TAP TO SHARE GIF' : 'G: share GIF', 600000);
+    } else { download(blob, 'overpopped-moment.gif'); flash('GIF saved'); }
+  } catch {
+    flash('No GIF this time');
+  } finally {
+    gif = null;
+  }
+}
+
 /** Play the same thing again: same start level, players and mode. Local games only. */
 function playAgain() {
   results = null;
@@ -297,6 +453,10 @@ function playAgain() {
 // The floor this player picked to start from, remembered until the page is closed or reloaded
 // (never saved: a fresh visit starts at the highest floor reached). -1 = follow the highest.
 let chosenFloor = -1;
+/** Developer picker: Backspace three times quickly on the menu or the tower opens every level, for this session only. Saves no progress. */
+let devAll = false;
+let backspaces: number[] = [];
+const towerTop = () => (devAll ? FLOORS.length - 1 : floorOf(reach));
 const startFloor = () => (chosenFloor >= 0 ? Math.min(chosenFloor, floorOf(reach)) : floorOf(reach));
 
 /** Report how each attempt at each level went, for the difficulty report. One upload per game. */
@@ -414,6 +574,16 @@ window.addEventListener('keydown', (e) => {
   if (settingsShown() && e.repeat && set.row <= 1 && !set.capture) { settingsKey(e.code); return; } // hold to slide the volume
   if (e.repeat) return;
   keys.add(e.code);
+  if (e.code === 'Backspace' && (screen === 'menu' || screen === 'tower')) {
+    const now = performance.now();
+    backspaces = [...backspaces.filter((t) => now - t < 900), now];
+    if (backspaces.length >= 3) {
+      backspaces = [];
+      devAll = true;
+      if (screen === 'menu') { menu.floor = startFloor(); menu.level = 0; screen = 'tower'; }
+    }
+    return;
+  }
   if (screen === 'menu') menuKey(e.code);
   else if (settingsShown()) settingsKey(e.code);
   else if (screen === 'stats') {
@@ -423,8 +593,16 @@ window.addEventListener('keydown', (e) => {
   else if (screen === 'tower') towerKey(e.code);
   else if (screen === 'lobby') lobbyKey(e.code);
   else if (screen === 'results') {
-    if (results && !results.online && (e.code === 'Enter' || e.code === 'Space')) playAgain();
+    if (e.code === 'KeyM') openMoments();
+    else if (e.code === 'KeyC') shareCard();
+    else if (results && !results.online && (e.code === 'Enter' || e.code === 'Space')) playAgain();
     else if (e.code === 'Enter' || e.code === 'Escape' || e.code === 'Space') closeResults();
+  }
+  else if (screen === 'drops') { if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'Space') screen = 'menu'; }
+  else if (screen === 'moments') momentsKey(e.code);
+  else if (screen === 'replay') {
+    if (e.code === 'KeyG') saveGif();
+    else if (e.code === 'Escape' || e.code === 'Enter' || e.code === 'Space') { if (!gif) screen = 'moments'; }
   }
   else gameKey(e.code);
 });
@@ -436,9 +614,10 @@ function startLocal(level: number) {
   lastStart = level;
   levels = TOWER;
   gameSet = TOWER_SET;
-  practice = level !== FLOOR_START[floorOf(level)];
+  practice = devAll || level !== FLOOR_START[floorOf(level)];
   const seed = (Date.now() & 0x7fffffff) | 1, n = menu.mode + 1;
   game = newGame(levels, n, level, seed, MODES[menu.gmode].id);
+  hl = new Highlights();
   musicShift = seed % 97;
   rec = { id: newId(), seed, start: level, n: 0, inp: Array.from({ length: n }, () => []), last: new Array<number>(n).fill(0) };
   gameStarted(false);
@@ -450,11 +629,12 @@ function startLocal(level: number) {
 
 function menuKey(code: string) {
   if (code === 'KeyS') { openStats(); return; }
-  if (code === 'ArrowUp') menu.row = (menu.row + 3) % 4;
-  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 4;
+  if (code === 'ArrowUp') menu.row = (menu.row + 4) % 5;
+  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 5;
   if ((code === 'Enter' || code === 'Space') && menu.row >= 2) {
     if (menu.row === 2) openSettings(false);
-    else openStats();
+    else if (menu.row === 3) openStats();
+    else { menu.t = 0; screen = 'drops'; }
     return;
   }
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
@@ -529,11 +709,11 @@ function setVolume(v: number) {
 const towerView = (top: number) => FLOORS.map((f, i) => ({ name: f.name, locked: i > top, levels: f.levels.map((L, k) => (seen(i, k) ? L.name : '')) }));
 
 /** Is this level of the selected floor one the player has seen? */
-const seen = (floor: number, k: number) => FLOOR_START[floor] + k <= reach;
+const seen = (floor: number, k: number) => devAll || FLOOR_START[floor] + k <= reach;
 
 function towerKey(code: string) {
   if (code === 'Escape') { screen = 'menu'; return; }
-  const top = floorOf(reach);
+  const top = towerTop();
   if (code === 'ArrowUp' && menu.floor < top) { menu.floor++; menu.level = 0; }
   if (code === 'ArrowDown' && menu.floor > 0) { menu.floor--; menu.level = 0; }
   if (code === 'ArrowRight' && seen(menu.floor, menu.level + 1) && menu.level + 1 < FLOORS[menu.floor].levels.length) menu.level++;
@@ -661,7 +841,18 @@ function tapUI(x: number, y: number): boolean {
   const close = x >= c.x - 10 && y <= c.y + c.h + 10;
   const near = (yy: number, r = 18) => Math.abs(y - yy) < r;
   const dir = x > VIEW_W / 2 ? 'ArrowRight' : 'ArrowLeft';
-  if (screen === 'stats') { if (close) screen = 'menu'; return true; }
+  if (screen === 'stats' || screen === 'drops') { if (close) screen = 'menu'; return true; }
+  if (screen === 'moments') {
+    const U = MOMENTS_UI;
+    if (close) momentsKey('Escape');
+    else if (y > U.y - 10 && y < U.y + U.h + 40) for (let k = 0; k < mom.thumbs.length; k++) if (Math.abs(x - momentX(k)) < U.w / 2) { mom.sel = k; momentsKey('Enter'); }
+    return true;
+  }
+  if (screen === 'replay') {
+    if (close) { if (!gif) screen = 'moments'; }
+    else if (y < 48 && Math.abs(x - REPLAY_GIF_BTN.x) < REPLAY_GIF_BTN.halfW) saveGif();
+    return true;
+  }
   if (settingsShown()) {
     if (close) closeSettings();
     else settingsTap(x, y);
@@ -669,7 +860,7 @@ function tapUI(x: number, y: number): boolean {
   }
   if (screen === 'menu') {
     const Y = MENU_Y;
-    for (let i = 0; i < 4; i++) if (near(Y.rows[i], i < 2 ? 20 : 17)) {
+    for (let i = 0; i < 5; i++) if (near(Y.rows[i], i < 2 ? 20 : 15)) {
       menu.row = i;
       if (i < 2) menuKey(x > (Y.lt + Y.gt) / 2 ? 'ArrowRight' : 'ArrowLeft');
       else menuKey('Enter');
@@ -694,8 +885,14 @@ function tapUI(x: number, y: number): boolean {
     // tapping an award heading shows how it's worked out; the buttons along the bottom carry on
     const k = awardAt(x, y);
     if (k >= 0 || awardHelp >= 0) awardHelp = k === awardHelp ? -1 : k;
-    else if (results?.online) closeResults();
-    else if (y > RESULTS_BTN_Y - 30) { if (x < VIEW_W / 2) playAgain(); else closeResults(); }
+    else if (y > RESULTS_BTN_Y - 24 && y < RESULTS_BTN_Y + 24 && results) {
+      const acts = resultsActions(results.online, resultsBack());
+      const a = acts[Math.min(acts.length - 1, Math.floor((x / VIEW_W) * acts.length))];
+      if (a.id === 'again') playAgain();
+      else if (a.id === 'moments') openMoments();
+      else if (a.id === 'share') shareCard();
+      else closeResults();
+    }
     return true;
   }
   if (screen === 'lobby') {
@@ -751,6 +948,7 @@ window.addEventListener('pointerdown', (e) => {
     unlockAudio();
     if (dragStart(e.pointerId, x, y)) { e.preventDefault(); return; }
     if (settingsShown()) settingsTap(x, y);
+    else if (screen === 'results' || screen === 'moments' || screen === 'replay') tapUI(x, y);
     return;
   }
   e.preventDefault();
@@ -828,7 +1026,19 @@ function frame(now: number) {
   if (screen !== 'game') pointers.clear();
   if (screen === 'results' && results) {
     menu.t += dt;
-    drawResults(ctx, { s: results.s, you: results.you, levels: SETS[results.set].levels, online: results.online, t: menu.t, help: awardHelp, back: resultsBack() });
+    drawResults(ctx, { s: results.s, you: results.you, levels: SETS[results.set].levels, online: results.online, t: menu.t, help: awardHelp, back: resultsBack(), note: performance.now() < note.until ? note.text : '' });
+  } else if (screen === 'moments' && results) {
+    menu.t += dt;
+    for (const th of mom.thumbs) { advanceReplay(th.r, false); drawReplayFrame(th.ctx, th.r, 0); }
+    drawMoments(ctx, { t: menu.t, sel: mom.sel, thumbs: mom.thumbs.map((th) => th.canvas), labels: mom.labels });
+  } else if (screen === 'replay' && results && mom.play) {
+    menu.t += dt;
+    if (!gif) { mom.acc = Math.min(mom.acc + dt, DT * 4); while (mom.acc >= DT) { mom.acc -= DT; advanceReplay(mom.play, true); } }
+    drawReplayFrame(ctx, mom.play, gif ? 0 : dt);
+    drawReplayBar(ctx, { t: menu.t, gif: gif ? gif.pct : -1, note: performance.now() < note.until ? note.text : '' });
+  } else if (screen === 'drops') {
+    menu.t += dt;
+    drawDrops(ctx, { t: menu.t, kinds: PICKUP_KINDS, found: life.drops });
   } else
   if (screen === 'game' && session) {
     // `rate` nudges our clock toward the other players', and eases off if someone goes quiet
@@ -864,7 +1074,9 @@ function frame(now: number) {
         inp.forEach((b, i) => { if (b !== r.last[i]) { r.inp[i].push(r.n, b); r.last[i] = b; } });
         r.n++;
       }
+      hl?.before(game);
       step(game, inp, levels, events);
+      hl?.after(game, inp);
     }
     if (events.length) {
       const f = levelAt(game, levels).floor;
@@ -893,7 +1105,7 @@ function frame(now: number) {
     statsScroll = drawStats(ctx, { life, floors: FLOORS.map((f, i) => (i <= floorOf(reach) ? f.name : '')), scroll: statsScroll });
   } else if (screen === 'tower') {
     menu.t += dt;
-    drawTower(ctx, { t: menu.t, floor: menu.floor, level: menu.level, floors: towerView(floorOf(reach)) });
+    drawTower(ctx, { t: menu.t, floor: menu.floor, level: menu.level, floors: towerView(towerTop()), dev: devAll });
   } else {
     menu.t += dt;
     if (lastScreen && lastScreen !== 'menu') nextSlogan();
@@ -943,6 +1155,7 @@ if (jump) {
     gameSet = si;
     practice = true;
     game = newGame(levels, 1, +jump[2] - 1, 12345);
+    hl = new Highlights();
     screen = 'game';
   }
 }

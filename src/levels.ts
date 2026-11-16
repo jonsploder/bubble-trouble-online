@@ -671,6 +671,11 @@ export const EXTRA: Level[] = [
     balls: [{ x: 200, y: 200, size: 2, dir: 1 }, { x: 760, y: 200, size: 2, dir: -1 }] },
   { name: 'Broadside', time: 90, weapon: 'side', drops: [], start: [440, 520, 400, 560],
     balls: [{ x: 220, y: 180, size: 3, dir: 1 }, { x: 740, y: 200, size: 2, dir: -1 }] },
+  // Every shot has to hit: a harpoon, vine or rocket that reaches the roof costs a life.
+  // Only those three drop (a laser always reaches the roof).
+  { name: 'Every Shot Counts', hint: 'Miss, and you\'re out.', time: 90, weapon: 'harpoon', noMiss: true,
+    drops: ['anchor', 'harpoon', 'rocket'], dropRate: 0.3, start: [440, 520, 400, 560],
+    balls: [{ x: 220, y: 200, size: 3, dir: 1 }, { x: 740, y: 180, size: 2, dir: -1 }] },
   { name: 'Arms Race', time: 100, drops: ['sword', 'side', 'rocket', 'lance', 'stub'], dropRate: 0.4, start: [440, 520, 400, 560],
     balls: [{ x: 200, y: 160, size: 4, dir: 1 }, { x: 760, y: 180, size: 3, dir: -1 }] },
 ];
@@ -686,7 +691,7 @@ export const FLOORS = [
   floor('The Workshop', ['Jailbreak', 'Careful What You Grab', 'Convoy', 'Pressure Cooker', 'Pinball', 'Laser Surgery', 'Rush Hour', 'Last Stand']),
   floor('Portal Gallery', ['Wormhole', 'Return Trip', 'Round Robin', 'Metronome', 'Through Traffic', 'Drum Line']),
   floor('Split Level', ['Triplets', "Three's a Crowd", 'Quadruplets', 'Mixed Bag', 'Split Ends', 'Numbers Game', 'Hall of Mirrors']),
-  floor('The Armoury', ['Point Blank', 'Light Show', 'En Garde', 'Broadside', 'Arms Race']),
+  floor('The Armoury', ['Point Blank', 'Light Show', 'En Garde', 'Broadside', 'Every Shot Counts', 'Arms Race']),
   floor('Heavy Weather', ['Tin Cans', 'Down Under', 'Upside Down', 'Headwind', 'Cannonballs', 'Weathervane', 'Flip Side']),
   floor('Machine Room', ['Carousel', 'Elevator', 'Crusher', 'Lockdown', 'Vertigo', 'Minefield']),
   floor('Overclocked', ['Too Much Coffee', 'Express', 'Butterfingers', 'Espresso Shot', 'Do Not Touch', 'Jitterbug']),
