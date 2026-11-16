@@ -94,14 +94,19 @@ The pause screen lists every mode's rules. The results screen ranks every player
 ## Logs, stats and the report
 
 When an online game ends, every player's browser uploads its own session log. At the end
-of any game (online or not) player 1 uploads a record of each attempt at each level. Both
-go to the Worker in `worker/` (Cloudflare free plan, Workers KV). Logs hold timings, key
-presses and packet arrival times; no IP addresses or names. The dev server never uploads.
+of any game (online or not) player 1 uploads a record of each attempt at each level: how
+long it lasted, whether it was cleared, failed or given up, and the lives lost. A game on
+one computer (solo or two players) also includes its random seed and every key change, so
+it can be replayed exactly; it uploads when the game ends and also if the page is closed or
+reloaded mid-game. Both go to the Worker in `worker/` (Cloudflare free plan, Workers KV).
+Logs hold timings, key presses and packet arrival times; no IP addresses or names. The dev
+server never uploads.
 
 ```bash
 npm run fetch-traces       # download new logs into traces/ and level stats into stats/levels/
 npm run report             # build report/index.html (add -- --sweep to compare netcode settings)
 npm run replay             # replay every logged session through today's netcode, in the terminal
+npm run solo               # replay the recorded one-computer games and check they reproduce
 npm run replay -- --sweep  # same, trying alternative netcode settings
 ```
 
@@ -115,7 +120,8 @@ The report has two parts:
   visibly in the wrong place (more than 8 px off). A final row replays every recorded
   session through today's netcode, which shows whether a change would have helped.
 - **Level difficulty**: per level, the number of attempts, the share cleared, the share
-  cleared first try, attempts per clear, median clear time, and solo vs group. Levels that
+  cleared first try, attempts per clear, median clear time, lives lost per clear, how
+  often it was given up mid-level, and solo vs group. Solo, every life is its own attempt. Levels that
   are cleared first time in at least 90% of games are flagged "too easy?". Levels cleared on
   fewer than 20% of attempts are flagged "too hard?". Fewer than 5 attempts is "little data".
 

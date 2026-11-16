@@ -113,14 +113,15 @@ const levelTables = SETS.map((set) => {
   const rows = set.levels.map((L, i) => {
     const a = agg.get(`${set.id}:${i}`);
     const [v, cls] = verdict(a);
-    if (!a) return `<tr><td>${i + 1}</td><td>${esc(L.name)}</td><td colspan="8" class="muted">not played yet</td><td><span class="tag muted">no data</span></td></tr>`;
+    if (!a) return `<tr><td>${i + 1}</td><td>${esc(L.name)}</td><td colspan="10" class="muted">not played yet</td><td><span class="tag muted">no data</span></td></tr>`;
     const rate = a.clears / Math.max(1, a.attempts);
     const ratio = (b: [number, number]) => (b[0] ? `${pct(b[1], b[0], 0)} <span class="muted">(${b[0]})</span>` : '<span class="muted">-</span>');
     return `<tr><td>${i + 1}</td><td>${esc(L.name)}</td><td>${a.games}</td><td>${a.attempts}</td><td><span class="bar"><i style="width:${(rate * 100).toFixed(0)}%"></i></span>${pct(a.clears, a.attempts, 0)}</td>` +
       `<td>${pct(a.firstClears, a.firstTries, 0)}</td><td>${a.clears ? (a.attempts / a.clears).toFixed(1) : '-'}</td><td>${a.clearTimes.length ? median(a.clearTimes).toFixed(0) + ' s' : '-'}</td>` +
+      `<td>${a.clears ? (a.lost / a.clears).toFixed(1) : a.lost ? `${a.lost} lost, none cleared` : '-'}</td><td>${a.quits || ''}</td>` +
       `<td>${ratio(a.solo)}</td><td>${ratio(a.group)}</td><td><span class="tag ${cls}">${v}</span></td></tr>`;
   }).join('');
-  return `<h3>${esc(set.name)}</h3><div class="scroll"><table><tr><th>#</th><th>Level</th><th>Games</th><th>Attempts</th><th>Cleared per attempt</th><th>Cleared first try</th><th>Attempts per clear</th><th>Median clear time</th><th>Solo</th><th>2+ players</th><th>Verdict</th></tr>${rows}</table></div>`;
+  return `<h3>${esc(set.name)}</h3><div class="scroll"><table><tr><th>#</th><th>Level</th><th>Games</th><th>Attempts</th><th>Cleared per attempt</th><th>Cleared first try</th><th>Attempts per clear</th><th>Median clear time</th><th>Lives lost per clear</th><th>Gave up mid-level</th><th>Solo</th><th>2+ players</th><th>Verdict</th></tr>${rows}</table></div>`;
 }).join('');
 const modeCounts = groupCount(recs.map((r) => `${r.mode}${r.players > 1 ? ` (${r.players}p)` : ' (solo)'}`));
 function groupCount(xs: string[]) { const m = new Map<string, number>(); for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1); return [...m].sort().map(([k, n]) => `${esc(k)}: ${n}`).join(', '); }

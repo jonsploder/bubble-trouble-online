@@ -12,6 +12,7 @@
     "fetch-traces": "node scripts/fetch-traces.mjs",
     "report": "esbuild scripts/report.ts --bundle --platform=node --outfile=node_modules/.cache/report.cjs --log-level=warning && node node_modules/.cache/report.cjs",
     "balance": "esbuild scripts/balance.ts --bundle --platform=node --outfile=node_modules/.cache/balance.cjs --log-level=warning && node node_modules/.cache/balance.cjs",
+    "solo": "esbuild scripts/solo.ts --bundle --platform=node --outfile=node_modules/.cache/solo.cjs --log-level=warning && node node_modules/.cache/solo.cjs",
     "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --outfile=node_modules/.cache/smoke.cjs && node node_modules/.cache/smoke.cjs"
   },
   "devDependencies": {

@@ -21,7 +21,7 @@ function validHalf(o) {
     && o.log && Array.isArray(o.log.tick) && Array.isArray(o.log.in) && Array.isArray(o.log.rx);
 }
 
-const MODES = ['classic', 'onegun', 'vip', 'versus', 'tethered', 'revive'];
+const MODES = ['classic', 'onegun', 'vip', 'versus', 'tethered', 'duo', 'revive'];
 function validLevels(o) {
   return o && o.format === 'splitstorm-levels' && o.v === 1
     && typeof o.id === 'string' && /^[a-z0-9]{8,32}$/.test(o.id)

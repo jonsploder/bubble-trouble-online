@@ -279,17 +279,35 @@ let chosenFloor = -1;
 const startFloor = () => (chosenFloor >= 0 ? Math.min(chosenFloor, floorOf(reach)) : floorOf(reach));
 
 /** Report how each attempt at each level went, for the difficulty report. One upload per game. */
-function uploadLevels(s: State, set: number, online: boolean) {
-  if (!TRACE_URL || (online && net.me !== 0) || s.mode === 'versus') return; // online, player 1 speaks for everyone; versus arenas aren't levels
+function uploadLevels(s: State, set: number, online: boolean, leaving = false) {
+  if (!TRACE_URL || (online && net.me !== 0)) return; // online, player 1 speaks for everyone
+  const body = levelRecord(s, set, online);
+  // `keepalive` lets the upload finish while the page is closing
+  if (body) fetch(`${TRACE_URL}/levels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: leaving }).catch(() => {});
+}
+
+const newId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+/** The keys held through a local game, so it can be replayed exactly later: per player, [step, bits] at each change. */
+let rec: { id: string; seed: number; start: number; n: number; inp: number[][]; last: number[] } | null = null;
+/** Changes as text: the gap in steps since the last change (base 36), then a letter A-P for the keys held (A = none). */
+const packInputs = (a: number[]) => {
+  let out = '', prev = 0;
+  for (let i = 0; i < a.length; i += 2) { out += (a[i] - prev).toString(36) + String.fromCharCode(65 + a[i + 1]); prev = a[i]; }
+  return out;
+};
+
+/** What gets uploaded about one game: every attempt at every level, and for local games the seed and keys to replay it. */
+function levelRecord(s: State, set: number, online: boolean): string | null {
+  if (s.mode === 'versus') return null; // versus arenas aren't levels
   const hist = s.hist.slice();
   if (s.phase === 'play' && s.lt > 300) hist.push([s.level, s.lt, 2, s.lost]); // gave up mid-attempt
-  if (!hist.length) return;
-  const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  fetch(`${TRACE_URL}/levels`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ format: 'splitstorm-levels', v: 1, id, version: VERSION, set: SETS[set].id, players: s.players.length, mode: s.mode, online, hist }),
-  }).catch(() => {});
+  const base = { format: 'splitstorm-levels', v: 1, id: !online && rec ? rec.id : newId(), version: VERSION, set: SETS[set].id, players: s.players.length, mode: s.mode, online, hist };
+  if (online || !rec) return hist.length ? JSON.stringify(base) : null;
+  if (rec.n < 300) return null; // under 5 seconds: nothing to learn
+  if (!hist.length) hist.push([s.level, s.lt, 2, s.lost]); // the collector wants at least one entry
+  const full = JSON.stringify({ ...base, seed: rec.seed, start: rec.start, steps: rec.n, inp: rec.inp.map(packInputs) });
+  return full.length < 60000 ? full : JSON.stringify(base); // the collector takes 64 KB: a very long game keeps its results and drops the keys
 }
 
 /** Send our part of a finished game's log to the trace collector. Best effort, never blocks play. */
@@ -398,7 +416,9 @@ function startLocal(level: number) {
   levels = TOWER;
   gameSet = TOWER_SET;
   practice = level !== FLOOR_START[floorOf(level)];
-  game = newGame(levels, menu.mode + 1, level, (Date.now() & 0x7fffffff) | 1, MODES[menu.gmode].id);
+  const seed = (Date.now() & 0x7fffffff) | 1, n = menu.mode + 1;
+  game = newGame(levels, n, level, seed, MODES[menu.gmode].id);
+  rec = { id: newId(), seed, start: level, n: 0, inp: Array.from({ length: n }, () => []), last: new Array<number>(n).fill(0) };
   gameStarted(false);
   acc = 0;
   pausePulse = false;
@@ -506,6 +526,7 @@ function quitGame() {
     uploadLevels(game, gameSet, false);
     showResults(game, gameSet, -1, false);
     game = null;
+    rec = null;
   }
 }
 
@@ -671,6 +692,8 @@ canvas.addEventListener('mousemove', (e) => {
 // Lifetime stats count the game in progress: online only our own player, from the confirmed game.
 watchGame(() => (session ? { s: session.confirmed, mine: [net.me] } : game ? { s: game, mine: game.players.map((_, i) => i) } : null));
 window.addEventListener('pagehide', saveNow);
+// closing or reloading mid-game still reports it (the collector keeps the first upload of a game, so this can't double up)
+window.addEventListener('pagehide', () => { if (game && rec) uploadLevels(game, gameSet, false, true); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
 
 window.addEventListener('pointerdown', (e) => {
@@ -786,7 +809,13 @@ function frame(now: number) {
     acc += dt;
     while (acc >= DT) {
       acc -= DT;
-      step(game, readInputs(game.players.length), levels, events);
+      const inp = readInputs(game.players.length);
+      if (rec) {
+        const r = rec;
+        inp.forEach((b, i) => { if (b !== r.last[i]) { r.inp[i].push(r.n, b); r.last[i] = b; } });
+        r.n++;
+      }
+      step(game, inp, levels, events);
     }
     if (events.length) {
       const f = levelAt(game, levels).floor;
@@ -842,6 +871,7 @@ if (import.meta.env.DEV) {
     get screen() { return screen; },
     get session() { return session; },
     get game() { return game; },
+    levelRecord: () => (game ? levelRecord(game, gameSet, false) : null),
   };
 }
 
