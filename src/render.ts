@@ -451,8 +451,8 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
     if (touch) text(ctx, 'Left thumb: slide to move      Right thumb: hold to fire', W / 2, 320, 15, '#8a90c7', 'center', 400);
   } else if (s.phase === 'clear' && L.floor && s.phaseT <= FLOOR_UP_TICKS && isFloorEnd(L)) drawFloorUp(ctx, s, L.floor - 1);
   else if (s.phase === 'clear') text(ctx, 'CLEAR!', W / 2, 200, 48, '#8ce99a');
-  else if (s.phase === 'over') overlay(ctx, 'GAME OVER', '#ff6b6b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
-  else if (s.phase === 'won') overlay(ctx, 'YOU WIN', '#ffd43b', `Score ${s.score}  -  ${touch ? 'tap to continue' : `Enter: ${net ? 'lobby' : 'menu'}`}`);
+  else if (s.phase === 'over') overlay(ctx, 'GAME OVER', '#ff6b6b', `Score ${s.score}`);
+  else if (s.phase === 'won') overlay(ctx, 'YOU WIN', '#ffd43b', `Score ${s.score}`);
   if (s.paused) {
     const quit = net ? 'quit to lobby' : 'quit to menu';
     ctx.fillStyle = 'rgba(7,8,15,0.88)';
@@ -726,7 +726,7 @@ export function drawStats(ctx: CanvasRenderingContext2D, v: StatsView): number {
     ['Drops picked up', L.picks.toLocaleString()],
     ['Levels cleared', String(L.levelsCleared)],
     ['Floors cleared', String(L.floorsCleared)],
-    ['Highest floor', String(v.floors.filter(Boolean).length)],
+    ['Best climb from the ground', !L.bestClimb ? '-' : L.bestClimb > FLOORS.length ? 'The top' : `Floor ${L.bestClimb}`],
   ];
   const view = U.bottom - U.top, max = Math.max(0, rows.length * U.rowH - view);
   const scroll = Math.max(0, Math.min(max, v.scroll));
@@ -1086,7 +1086,12 @@ function drawRole(ctx: CanvasRenderingContext2D, role: 'gun' | 'vip' | '', x: nu
 
 export interface ResultsView { s: State; you: number; levels: Level[]; online: boolean; t: number;
   /** Which award's (?) is being hovered or was tapped, or -1. */
-  help: number }
+  help: number;
+  /** Where going back leads: 'lobby', 'tower' or 'menu'. */
+  back: string }
+
+/** Height of the play again / back line on the results screen. */
+export const RESULTS_BTN_Y = H + 20;
 
 /** Where the award headings sit, for hovering/tapping their (?). */
 export const AWARD_UI = { y: 372, gap: 280, halfW: 110 };
@@ -1174,5 +1179,10 @@ export function drawResults(ctx: CanvasRenderingContext2D, v: ResultsView) {
     ctx.strokeRect(bx, by, bw, bh);
     lines.forEach((l, i) => text(ctx, l, bx + 12, by + 18 + i * 18, 13, '#e8eaf6', 'left', 400));
   }
-  text(ctx, touch ? 'TAP TO CONTINUE' : `Enter: back to the ${v.online ? 'lobby' : 'menu'}`, W / 2, H + 20, touch ? 22 : 16, '#8ce99a');
+  const back = v.back === 'tower' ? 'choose floor' : v.back;
+  if (v.online) text(ctx, touch ? 'TAP TO CONTINUE' : 'Enter: back to the lobby', W / 2, RESULTS_BTN_Y, touch ? 22 : 16, '#8ce99a');
+  else if (touch) {
+    text(ctx, 'PLAY AGAIN', W * 0.3, RESULTS_BTN_Y, 24, '#8ce99a');
+    text(ctx, back.toUpperCase(), W * 0.7, RESULTS_BTN_Y, 24, '#cfd4ff');
+  } else text(ctx, `Enter: play again      Esc: ${back}`, W / 2, RESULTS_BTN_Y, 16, '#8ce99a');
 }

@@ -17,13 +17,15 @@ export interface Lifetime {
   picks: number;
   levelsCleared: number;
   floorsCleared: number;
+  /** The highest floor reached in one run that started on the very first level (1-based; FLOORS.length + 1 = cleared the top floor), or 0. */
+  bestClimb: number;
   /** Fastest clear of each floor in one run, in seconds (start of its first level to the end of its last), or 0. */
   bestFloor: number[];
   /** How many players and which mode that fastest clear was in. */
   bestFloorBy: string[];
 }
 
-const blank = (): Lifetime => ({ playSecs: 0, games: 0, onlineGames: 0, pops: 0, deaths: 0, shots: 0, picks: 0, levelsCleared: 0, floorsCleared: 0, bestFloor: FLOORS.map(() => 0), bestFloorBy: FLOORS.map(() => '') });
+const blank = (): Lifetime => ({ playSecs: 0, games: 0, onlineGames: 0, pops: 0, deaths: 0, shots: 0, picks: 0, levelsCleared: 0, floorsCleared: 0, bestClimb: 0, bestFloor: FLOORS.map(() => 0), bestFloorBy: FLOORS.map(() => '') });
 
 export const life: Lifetime = blank();
 try {
@@ -93,6 +95,7 @@ export function gameEnded() {
 /** The last level of tower floor `f` was just cleared in `s` (a tower game). */
 export function floorCleared(s: State, f: number) {
   life.floorsCleared++;
+  if (s.hist[0]?.[0] === 0) life.bestClimb = Math.max(life.bestClimb, f + 2); // a run from the ground floor: it now stands on floor f + 2
   const lo = FLOOR_START[f], hi = lo + FLOORS[f].levels.length;
   // only a run that started on the floor's first level counts towards a best time
   if (!s.hist.some((h) => h[0] === lo)) { saveLife(); return; }

@@ -4,7 +4,7 @@ import { FLOORS, FLOOR_START, SETS, TOWER, TOWER_SET } from './levels';
 import { addPlayTime, floorCleared, gameEnded, gameStarted, life, saveNow, watchGame } from './stats';
 import { MAX_PLAYERS, hostRoom, joinRoom } from './net';
 import type { Room, RosterEntry } from './net';
-import { AWARD_UI, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawSettings, drawStats, drawTower, SET_UI, STATS_UI, fxEvents, setTouch } from './render';
+import { AWARD_UI, RESULTS_BTN_Y, CLOSE_BTN, LOBBY_Y, MENU_Y, VIEW_H, VIEW_W, TOWER_UI, drawGame, drawLobby, drawMenu, drawResults, drawRotate, drawSettings, drawStats, drawTower, SET_UI, STATS_UI, fxEvents, setTouch } from './render';
 import { INPUT_DELAY, RollbackSession } from './rollback';
 import type { InputMsg, PeerLog } from './rollback';
 import { DT, IN_FIRE, IN_LEFT, IN_PAUSE, IN_RIGHT, MODES, levelAt, newGame, step } from './sim';
@@ -50,6 +50,8 @@ const SLOGANS = [
   'Pop responsibly', 'Divide and be conquered', 'Split happens', 'Pop culture', 'Breaking up is easy', 'Have a ball',
   'Ballpark estimate: too many', "You'll bounce back from this", 'Burst your bubble', 'Enter the ball of fame', "Pop 'til you drop",
 ];
+let overT = 0;
+const OVER_SECS = 2.5;
 let slogan = Math.floor(Math.random() * SLOGANS.length), lastScreen = '';
 const nextSlogan = () => { slogan = (slogan + 1 + Math.floor(Math.random() * (SLOGANS.length - 1))) % SLOGANS.length; };
 const menu = { floor: 0, level: 0, gmode: 0, mode: 0, row: 0, t: 0 }; // floor/level: the tower pick; gmode: game mode (MODES), mode: how to play (PLAY_MODES)
@@ -253,13 +255,28 @@ function showResults(s: State, set: number, you: number, online: boolean) {
   keys.clear();
 }
 
+/** Where Esc on the results screen goes: the lobby online, the floor picker after a tower run, else the menu. */
+function resultsBack(): Screen {
+  if (results?.online && net.room) return 'lobby';
+  return results && results.set === TOWER_SET && results.s.mode !== 'versus' ? 'tower' : 'menu';
+}
+
 function closeResults() {
-  const tower = results && results.set === TOWER_SET && results.s.mode !== 'versus';
-  screen = results?.online && net.room ? 'lobby' : tower ? 'tower' : 'menu';
-  menu.floor = floorOf(reach);
-  menu.level = 0;
+  screen = resultsBack();
+  if (!results?.online) { menu.floor = startFloor(); menu.level = 0; } // online, the host's lobby pick stays
   results = null;
 }
+
+/** Play the same thing again: same start level, players and mode. Local games only. */
+function playAgain() {
+  results = null;
+  startLocal(lastStart);
+}
+
+// The floor this player picked to start from, remembered until the page is closed or reloaded
+// (never saved: a fresh visit starts at the highest floor reached). -1 = follow the highest.
+let chosenFloor = -1;
+const startFloor = () => (chosenFloor >= 0 ? Math.min(chosenFloor, floorOf(reach)) : floorOf(reach));
 
 /** Report how each attempt at each level went, for the difficulty report. One upload per game. */
 function uploadLevels(s: State, set: number, online: boolean) {
@@ -366,13 +383,18 @@ window.addEventListener('keydown', (e) => {
   }
   else if (screen === 'tower') towerKey(e.code);
   else if (screen === 'lobby') lobbyKey(e.code);
-  else if (screen === 'results') { if (e.code === 'Enter' || e.code === 'Escape' || e.code === 'Space') closeResults(); }
+  else if (screen === 'results') {
+    if (results && !results.online && (e.code === 'Enter' || e.code === 'Space')) playAgain();
+    else if (e.code === 'Enter' || e.code === 'Escape' || e.code === 'Space') closeResults();
+  }
   else gameKey(e.code);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 
+let lastStart = 0;
 function startLocal(level: number) {
+  lastStart = level;
   levels = TOWER;
   gameSet = TOWER_SET;
   practice = level !== FLOOR_START[floorOf(level)];
@@ -397,11 +419,11 @@ function menuKey(code: string) {
   if (d && menu.row === 0) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
   if (d && menu.row === 1) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
   if (code === 'Enter' || code === 'Space') {
-    if (menu.mode === 2) { menu.floor = floorOf(reach); openHost(); }
+    if (menu.mode === 2) { menu.floor = startFloor(); openHost(); }
     else if (menu.mode === 3) openJoin();
     else if (menu.mode === 0 && MODES[menu.gmode].id !== 'classic') return; // needs 2+ players: the menu says so
     else if (MODES[menu.gmode].id === 'versus') startLocal(0); // versus makes its own arenas
-    else { menu.floor = floorOf(reach); menu.level = 0; screen = 'tower'; }
+    else { menu.floor = startFloor(); menu.level = 0; screen = 'tower'; }
   }
 }
 
@@ -451,7 +473,10 @@ function towerKey(code: string) {
   if (code === 'ArrowDown' && menu.floor > 0) { menu.floor--; menu.level = 0; }
   if (code === 'ArrowRight' && seen(menu.floor, menu.level + 1) && menu.level + 1 < FLOORS[menu.floor].levels.length) menu.level++;
   if (code === 'ArrowLeft' && menu.level > 0) menu.level--;
-  if (code === 'Enter' || code === 'Space') startLocal(FLOOR_START[menu.floor] + menu.level);
+  if (code === 'Enter' || code === 'Space') {
+    chosenFloor = menu.floor < top ? menu.floor : -1; // starting from the top floor reached keeps following it as it rises
+    startLocal(FLOOR_START[menu.floor] + menu.level);
+  }
 }
 
 function lobbyKey(code: string) {
@@ -598,10 +623,11 @@ function tapUI(x: number, y: number): boolean {
     return true;
   }
   if (screen === 'results') {
-    // tapping an award heading shows how it's worked out; tap anywhere else to carry on
+    // tapping an award heading shows how it's worked out; the buttons along the bottom carry on
     const k = awardAt(x, y);
     if (k >= 0 || awardHelp >= 0) awardHelp = k === awardHelp ? -1 : k;
-    else closeResults();
+    else if (results?.online) closeResults();
+    else if (y > RESULTS_BTN_Y - 30) { if (x < VIEW_W / 2) playAgain(); else closeResults(); }
     return true;
   }
   if (screen === 'lobby') {
@@ -731,7 +757,7 @@ function frame(now: number) {
   if (screen !== 'game') pointers.clear();
   if (screen === 'results' && results) {
     menu.t += dt;
-    drawResults(ctx, { s: results.s, you: results.you, levels: SETS[results.set].levels, online: results.online, t: menu.t, help: awardHelp });
+    drawResults(ctx, { s: results.s, you: results.you, levels: SETS[results.set].levels, online: results.online, t: menu.t, help: awardHelp, back: resultsBack() });
   } else
   if (screen === 'game' && session) {
     // `rate` nudges our clock toward the other players', and eases off if someone goes quiet
@@ -795,6 +821,12 @@ function frame(now: number) {
     if (lastScreen && lastScreen !== 'menu') nextSlogan();
     drawMenu(ctx, { blocked: menu.mode === 0 && MODES[menu.gmode].id !== 'classic', row: menu.row, t: menu.t, gameMode: MODES[menu.gmode], playName: PLAY_MODES[menu.mode], playSecs: life.playSecs, controls: [controlsLine(0), controlsLine(1)], slogan: SLOGANS[slogan] });
   }
+  // a finished game shows GAME OVER / YOU WIN for a moment, then the results (Enter or a tap skips ahead)
+  const done = screen === 'game' ? (session ? session.confirmed : game) : null;
+  if (done && (done.phase === 'over' || done.phase === 'won')) {
+    overT += dt;
+    if (overT > OVER_SECS) { overT = 0; quitGame(); }
+  } else overT = 0;
   lastScreen = screen;
   if (portrait()) drawRotate(ctx);
   requestAnimationFrame(frame);
