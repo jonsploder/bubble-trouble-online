@@ -44,13 +44,13 @@ All 58 levels are one climb of nine floors (`FLOORS` in `src/levels.ts`). Each f
 |---|---|---|
 | 1 | Ground Floor | 7: the basics |
 | 2 | The Workshop | 8: Quickstep, then gates, drops, a descending roof |
-| 3 | Portal Gallery | 6: portals, balls that bounce on the spot |
+| 3 | Portal Gallery | 5: portals, balls that bounce on the spot |
 | 4 | Split Level | 7: balls that split into 3 and 4 (the number on a ball is how many pieces) |
-| 5 | The Armoury | 6: odd weapons (below), and Every Shot Counts: a harpoon, vine or rocket that reaches the roof without hitting a ball costs a life (level flag `noMiss`; the roof glows red) |
+| 5 | The Armoury | 6: odd weapons (below), and Every Shot Counts: a harpoon, vine or rocket that reaches the roof without hitting a ball costs a life (level flag `noMiss`; the roof glows red and is hung with skulls) |
 | 6 | Heavy Weather | 7: armour, wind, gravity flips |
 | 7 | Machine Room | 6: spin, moving blocks, crushers |
 | 8 | Overclocked | 7: speed and cursed drops, and Photo Finish (outrun three balls to the far wall) |
-| 9 | Summit | 4: Last Stand, then everything |
+| 9 | Summit | 5: Last Stand, Drum Line, then everything |
 
 - A run starts at the first level of any unlocked floor with 3 lives each. Game over means starting that floor again.
 - The floor picker opens on the highest floor reached. If you start lower, that floor is remembered until the page is reloaded (it isn't saved).
@@ -68,13 +68,13 @@ Weapons beyond the harpoon, twin harpoon, sticky vine, pulse gun and beam:
 
 | Weapon | What it does |
 |---|---|
-| Short harpoon | Reaches only 48 px above your head, and fires at most once every 0.3 s. |
+| Short harpoon | Reaches only 72 px above your head, rises at half a harpoon's speed, and fires at most once every 0.6 s. |
 | Sword | A swipe 46 px in front of you, at body height. |
-| Floor bolt | One bolt at a time along the floor, the way you face, picking up speed. |
+| Floor bolt | One bolt at a time along the floor, the way you face, picking up speed. Its tail (up to 180 px, longer the faster it goes) pops too. |
 | Rocket | The same, straight up, and wide (18 px). Drops in ordinary levels too. |
 | Lance | One thin 96 px bar of light at a time, travelling up. Drops in ordinary levels too. |
 
-On the dev server, `?reach=20` opens the map as if level 20 had been reached, and `?play=tower-17` jumps into a level. Neither saves. On any build, pressing Backspace three times quickly on the menu or the tower picker opens every level for the session (marked DEV, saves no progress).
+On the dev server, `?reach=20` opens the map as if level 20 had been reached, and `?play=tower-17` jumps into a level. Neither saves. On any build, pressing Backspace three times quickly on the menu or the tower picker opens every level for the session (marked DEV, saves no progress); the picker then stays on the floor and level last chosen.
 
 The pause screen lists every mode's rules. The results screen ranks every player on three awards: **Most reckless** (time spent within 16 px of a ball), **Closest shave** (smallest gap to a ball that didn't hit you) and **Sharpshooter** (pops per shot).
 

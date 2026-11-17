@@ -3,7 +3,7 @@ import { FLOORS, FLOOR_START } from './levels';
 import { clock, longTime } from './stats';
 import type { Lifetime } from './stats';
 import type { GameEvent, Level, PickupKind, State, Mode } from './sim';
-import { LANCE_LEN, ROCKET_HALF, ROCKET_LEN, MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, SWORD_REACH, TETHER, VERSUS_WINS, roped } from './sim';
+import { boltTail, LANCE_LEN, ROCKET_HALF, ROCKET_LEN, MODES, REVIVE_NEED, REVIVE_R, REVIVE_TICKS, SWORD_REACH, TETHER, VERSUS_WINS, roped } from './sim';
 
 export const VIEW_W = W;
 export const VIEW_H = H + 60;
@@ -168,6 +168,17 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
       g.addColorStop(1, 'rgba(255,60,60,0)');
       ctx.fillStyle = g;
       ctx.fillRect(0, top, W, 34);
+      // ...and is hung with skulls
+      for (let x = 40; x < W; x += 80) {
+        const y = top + 13;
+        ctx.fillStyle = '#e9dcc9';
+        ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.fillRect(x - 5, y + 4, 10, 8);
+        ctx.fillStyle = '#1a0a0e';
+        ctx.beginPath(); ctx.arc(x - 3.2, y + 0.5, 2.4, 0, Math.PI * 2); ctx.arc(x + 3.2, y + 0.5, 2.4, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x, y + 3); ctx.lineTo(x - 1.4, y + 6); ctx.lineTo(x + 1.4, y + 6); ctx.fill();
+        ctx.fillRect(x - 2.6, y + 8, 1, 4); ctx.fillRect(x - 0.5, y + 8, 1, 4); ctx.fillRect(x + 1.6, y + 8, 1, 4);
+      }
     }
   }
 
@@ -208,8 +219,8 @@ export function drawGame(ctx: CanvasRenderingContext2D, s: State, L: Level, wher
       ctx.beginPath(); ctx.arc(sh.x, H - 16, SWORD_REACH - 2, sh.v > 0 ? -1.25 : Math.PI - 0.35, sh.v > 0 ? 0.35 : Math.PI + 1.25); ctx.stroke();
       ctx.globalAlpha = 1;
     } else if (sh.kind === 'dartx') {
-      const d = Math.sign(sh.v), tail = Math.min(60, Math.abs(sh.v) * 0.05);
-      ctx.fillStyle = col; ctx.globalAlpha = 0.4;
+      const d = Math.sign(sh.v), tail = boltTail(sh.v);
+      ctx.fillStyle = col; ctx.globalAlpha = 0.7;
       ctx.fillRect(Math.min(sh.x, sh.x - d * tail), sh.y - 1.5, tail, 3);
       ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
       ctx.beginPath(); ctx.moveTo(sh.x + d * 8, sh.y); ctx.lineTo(sh.x - d * 5, sh.y - 5); ctx.lineTo(sh.x - d * 5, sh.y + 5); ctx.fill();
@@ -629,8 +640,8 @@ function backdrop(ctx: CanvasRenderingContext2D, t: number) {
   ctx.globalAlpha = 1;
 }
 
-/** Menu layout (view coordinates): the four rows (Mode, Play, Settings, Stats), the play line, and the selector columns. */
-export const MENU_Y = { rows: [222, 262, 326, 358, 390], hint: 292, go: 438, played: 470, label: 330, lt: 370, gt: 790 };
+/** Menu layout (view coordinates): the six rows (Play, Mode, Players, Settings, Stats, Drops), all on the centre line. */
+export const MENU_Y = { rows: [226, 282, 320, 384, 416, 448], hint: 348, played: 478 };
 
 export interface MenuView {
   /** The chosen mode needs more players than the chosen way of playing gives. */
@@ -647,19 +658,20 @@ export function drawMenu(ctx: CanvasRenderingContext2D, m: MenuView) {
   const Y = MENU_Y;
   text(ctx, 'OVERPOPPED', W / 2, 110, 72, '#fff');
   text(ctx, m.slogan, W / 2, 162, 16, '#cfd4ff', 'center', 400);
-  // Mode and Play: labels right-aligned in one column, values centred between fixed arrows
-  ([['Mode', m.gameMode.name], ['Play', m.playName]] as const).forEach(([k, v], i) => {
-    const y = Y.rows[i], on = m.row === i, col = on ? '#ffd43b' : '#8a90c7';
-    text(ctx, k, Y.label, y, 22, on ? '#ffd43b' : '#5b6090', 'right');
-    text(ctx, '<', Y.lt, y, 22, col);
-    text(ctx, v, (Y.lt + Y.gt) / 2, y, 22, col);
-    text(ctx, '>', Y.gt, y, 22, col);
+  const sel = '#ffd43b';
+  if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players`, W / 2, Y.rows[0], 20, '#ff8787');
+  else text(ctx, touch ? 'TAP TO PLAY' : 'PLAY', W / 2, Y.rows[0], 34, m.row === 0 ? sel : '#8ce99a');
+  // Mode and Players: each value on the centre line, with its arrows either side
+  [m.gameMode.name, m.playName].forEach((v, i) => {
+    const y = Y.rows[1 + i], on = m.row === 1 + i, col = on ? sel : '#8a90c7';
+    text(ctx, v, W / 2, y, 20, col);
+    const half = ctx.measureText(v).width / 2 + 22;
+    text(ctx, '<', W / 2 - half, y, 20, col);
+    text(ctx, '>', W / 2 + half, y, 20, col);
   });
   const hint = m.gameMode.id === 'classic' ? '' : m.gameMode.hint;
   if (hint) text(ctx, hint, W / 2, Y.hint, 13, '#8a90c7', 'center', 400);
-  ['Settings', 'Stats', 'Drops'].forEach((k, i) => text(ctx, k, W / 2, Y.rows[2 + i], 20, m.row === 2 + i ? '#ffd43b' : '#8a90c7'));
-  if (m.blocked) text(ctx, `${m.gameMode.name} needs 2+ players`, W / 2, Y.go, 18, '#ff8787');
-  else text(ctx, touch ? 'TAP HERE TO PLAY' : 'Enter: go', W / 2, Y.go, touch ? 26 : 22, '#8ce99a');
+  ['Settings', 'Stats', 'Drops'].forEach((k, i) => text(ctx, k, W / 2, Y.rows[3 + i], 20, m.row === 3 + i ? sel : '#8a90c7'));
   if (m.playSecs >= 60) text(ctx, `${longTime(m.playSecs)} played`, W / 2, Y.played, 13, '#5b6090', 'center', 400);
   text(ctx, touch ? 'Tap a row to change it' : `P1: ${m.controls[0]}      P2: ${m.controls[1]}      P: pause   Esc: menu`, W / 2, H + 30, 14, '#8a90c7', 'center', 400);
 }

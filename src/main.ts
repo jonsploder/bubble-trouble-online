@@ -15,7 +15,7 @@ import type { Clip } from './highlights';
 import type { GameEvent, Level, Mode, State } from './sim';
 
 /** All players must run the same build: the sim and level data have to match exactly. */
-const VERSION = 22;
+const VERSION = 23;
 /** Trace collector (see worker/). Empty = don't upload. The dev server never uploads, so test games stay out of the data. */
 const TRACE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_TRACE_URL ?? '').replace(/\/$/, '');
 const PLAY_MODES = ['1 player', '2 players (same keyboard)', 'Host online game', 'Join online game'];
@@ -91,13 +91,16 @@ const SAVE_KEY = 'splitstorm.tower.v2';
 const OLD_SAVE_KEY = 'splitstorm.tower.v1', V1_TOWER = V21_TOWER.filter((n) => n !== 'Photo Finish' && n !== 'Every Shot Counts');
 /** Set once a save has been moved onto the v22 layout. Before it, a save naming a level that moved up the
  *  tower means the player got that far on the old layout, not that far up the new one. */
-const LAYOUT_KEY = 'splitstorm.tower.layout', LAYOUT = '22';
-const MOVED_UP: Record<string, string> = { 'Photo Finish': 'Trigger Happy', 'Last Stand': 'Rush Hour' };
+const LAYOUT_KEY = 'splitstorm.tower.layout', LAYOUT = '23';
+/** Levels that moved up the tower, by the layout that moved them, and the level each used to follow. */
+const MOVED_UP: Record<string, Record<string, string>> = { 22: { 'Photo Finish': 'Trigger Happy', 'Last Stand': 'Rush Hour' }, 23: { 'Drum Line': 'Through Traffic' } };
 let reach = 0;
 try {
   let name = localStorage.getItem(SAVE_KEY) ?? V1_TOWER[Math.floor(+(localStorage.getItem(OLD_SAVE_KEY) ?? 0)) || 0];
   if (localStorage.getItem(LAYOUT_KEY) !== LAYOUT) {
-    if (name && MOVED_UP[name]) { name = MOVED_UP[name]; localStorage.setItem(SAVE_KEY, name); }
+    const was = +(localStorage.getItem(LAYOUT_KEY) ?? 21), old = name;
+    for (const v of [22, 23]) if (was < v && name && MOVED_UP[v][name]) name = MOVED_UP[v][name];
+    if (name && name !== old) localStorage.setItem(SAVE_KEY, name);
     localStorage.setItem(LAYOUT_KEY, LAYOUT);
   }
   reach = Math.max(0, TOWER.findIndex((L) => L.name === name));
@@ -302,7 +305,7 @@ function resultsBack(): Screen {
 
 function closeResults() {
   screen = resultsBack();
-  if (!results?.online) { menu.floor = startFloor(); menu.level = 0; } // online, the host's lobby pick stays
+  if (!results?.online && !devAll) { menu.floor = startFloor(); menu.level = 0; } // online, the host's lobby pick stays; so does a developer's
   results = null;
 }
 
@@ -643,23 +646,23 @@ function startLocal(level: number) {
 
 function menuKey(code: string) {
   if (code === 'KeyS') { openStats(); return; }
-  if (code === 'ArrowUp') menu.row = (menu.row + 4) % 5;
-  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 5;
-  if ((code === 'Enter' || code === 'Space') && menu.row >= 2) {
-    if (menu.row === 2) openSettings(false);
-    else if (menu.row === 3) openStats();
+  if (code === 'ArrowUp') menu.row = (menu.row + 5) % 6;
+  if (code === 'ArrowDown') menu.row = (menu.row + 1) % 6;
+  if ((code === 'Enter' || code === 'Space') && menu.row >= 3) {
+    if (menu.row === 3) openSettings(false);
+    else if (menu.row === 4) openStats();
     else { menu.t = 0; screen = 'drops'; }
     return;
   }
   const d = code === 'ArrowRight' ? 1 : code === 'ArrowLeft' ? -1 : 0;
-  if (d && menu.row === 0) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
-  if (d && menu.row === 1) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
+  if (d && menu.row === 1) menu.gmode = (menu.gmode + d + MODES.length) % MODES.length;
+  if (d && menu.row === 2) menu.mode = (menu.mode + d + PLAY_MODES.length) % PLAY_MODES.length;
   if (code === 'Enter' || code === 'Space') {
     if (menu.mode === 2) { menu.floor = startFloor(); openHost(); }
     else if (menu.mode === 3) openJoin();
     else if (menu.mode === 0 && MODES[menu.gmode].id !== 'classic') return; // needs 2+ players: the menu says so
     else if (MODES[menu.gmode].id === 'versus') startLocal(0); // versus makes its own arenas
-    else { menu.floor = startFloor(); menu.level = 0; screen = 'tower'; }
+    else { if (!devAll) { menu.floor = startFloor(); menu.level = 0; } screen = 'tower'; }
   }
 }
 
@@ -882,12 +885,11 @@ function tapUI(x: number, y: number): boolean {
   }
   if (screen === 'menu') {
     const Y = MENU_Y;
-    for (let i = 0; i < 5; i++) if (near(Y.rows[i], i < 2 ? 20 : 15)) {
+    for (let i = 0; i < 6; i++) if (near(Y.rows[i], i === 0 ? 26 : i < 3 ? 19 : 15)) {
       menu.row = i;
-      if (i < 2) menuKey(x > (Y.lt + Y.gt) / 2 ? 'ArrowRight' : 'ArrowLeft');
+      if (i === 1 || i === 2) menuKey(x > W_MID ? 'ArrowRight' : 'ArrowLeft');
       else menuKey('Enter');
     }
-    if (near(Y.go, 30)) menuKey('Enter');
     return true;
   }
   if (screen === 'tower') {
@@ -895,7 +897,7 @@ function tapUI(x: number, y: number): boolean {
     if (close) towerKey('Escape');
     else if (x < U.listX - 30) {
       const f = FLOORS.length - 1 - Math.floor((y - U.top) / (U.slabH + U.gap));
-      if (f >= 0 && f <= floorOf(reach)) { menu.floor = f; menu.level = 0; }
+      if (f >= 0 && f <= towerTop()) { menu.floor = f; menu.level = 0; }
     } else if (y > U.goY - 26) towerKey('Enter');
     else {
       const k = Math.round((y - U.listY) / U.listGap);

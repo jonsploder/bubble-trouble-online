@@ -9,34 +9,35 @@ export const CAMPAIGN: Level[] = [
     name: 'Warm-Up',
     hint: 'Move with the arrows, fire with Space.',
     time: 30,
-    start: [480, 560],
-    balls: [{ x: 260, y: 220, size: 2, dir: 1 }],
+    start: [400, 320],
+    balls: [{ x: 690, y: 250, size: 2, dir: -1 }],
   },
   {
     name: 'Two-Way Street',
     time: 45,
+    start: [440, 520, 400, 560],
     balls: [
-      { x: 200, y: 200, size: 3, dir: 1 },
-      { x: 760, y: 200, size: 3, dir: -1 },
+      { x: 230, y: 150, size: 3, dir: 1 },
+      { x: 760, y: 260, size: 3, dir: -1 },
     ],
   },
   {
     name: 'The Big One',
     hint: 'Pop it at the top of its arc and the spikes help out.',
     time: 60,
-    start: [180, 110],
-    balls: [{ x: 600, y: 170, size: 4, dir: -1 }],
+    start: [800, 870],
+    balls: [{ x: 330, y: 150, size: 4, dir: 1 }],
   },
   {
     name: 'Open Sesame',
     hint: 'Clear your side and the gate opens.',
     time: 60,
-    start: [110, 50],
-    rects: [{ x: 472, y: 0, w: 16, h: 480, gate: 1 }],
+    start: [860, 920],
+    rects: [{ x: 412, y: 0, w: 16, h: 480, gate: 1 }],
     balls: [
-      { x: 300, y: 180, size: 3, dir: 1, group: 1 },
-      { x: 640, y: 220, size: 2, dir: 1 },
-      { x: 820, y: 180, size: 2, dir: -1 },
+      { x: 640, y: 170, size: 3, dir: -1, group: 1 },
+      { x: 280, y: 240, size: 2, dir: -1 },
+      { x: 130, y: 180, size: 2, dir: 1 },
     ],
   },
   {
@@ -156,15 +157,18 @@ export const CAMPAIGN: Level[] = [
   {
     name: 'Laser Surgery',
     hint: 'The beam cuts through everything. The spikes do the rest.',
-    time: 70,
+    // A short clock, topped up by clocks from about two pops in five: waiting for the roof to
+    // come down and spike the big ones runs out of time first (it takes the roof 22 s to reach them).
+    time: 20,
     weapon: 'beam',
     spikes: true,
     ceiling: { speed: 8, lift: 4 },
-    drops: ['shield'],
+    drops: ['time', 'time', 'time', 'time', 'shield'],
+    dropRate: 0.5,
     start: [480, 400],
     balls: [
       { x: 180, y: 240, size: 4, dir: 1 },
-      { x: 780, y: 240, size: 4, dir: -1 },
+      { x: 780, y: 240, size: 3, dir: -1 },
     ],
   },
   {
@@ -407,12 +411,15 @@ export const TWISTS: Level[] = [
   },
   {
     name: 'Return Trip',
-    hint: 'Portals work both ways. Off one side, on the other.',
-    time: 80,
-    start: [440, 520, 360, 600],
-    portals: [[60, 440, 900, 440]],
+    hint: 'Portals work both ways. In one, out of the other.',
+    // The portals stand a third of the way in: a ball low enough at one skips to the other, so it
+    // either laps the middle or jumps clean over it, and one that is high sails past into the wings.
+    time: 90,
+    start: [520, 580, 480, 620],
+    portals: [[290, 440, 670, 440]],
     balls: [
-      { x: 220, y: 240, size: 3, dir: -1 },
+      { x: 420, y: 230, size: 3, dir: -1 },
+      { x: 840, y: 280, size: 2, dir: -1 },
     ],
   },
   {
@@ -430,10 +437,10 @@ export const TWISTS: Level[] = [
   {
     name: 'Metronome',
     hint: 'They bounce on the spot. Step under one while it\'s up, fire, step out.',
-    time: 60,
+    time: 75,
     dropRate: 0,
-    start: [60, 110, 160, 210],
-    ...drumLine(row(5, 320, 130), () => 0, () => 0),
+    start: [100, 60, 140, 20],
+    ...drumLine(row(10, 190, 75), () => 0, () => 0),
   },
   // ---------------------------------------------------------------- 3. splits
   {
@@ -556,9 +563,9 @@ export const TWISTS: Level[] = [
     time: 100,
     split: 3,
     start: [440, 520, 360, 600],
-    portals: [[60, 440, 900, 440]],
+    portals: [[200, 440, 760, 440]],
     balls: [
-      { x: 240, y: 220, size: 2, dir: -1 },
+      { x: 330, y: 220, size: 2, dir: -1 },
     ],
   },
   {
@@ -599,12 +606,13 @@ export const TWISTS: Level[] = [
   {
     name: 'Through Traffic',
     hint: 'A row of metronomes, and one ball that keeps coming round through the portals.',
-    time: 90,
+    time: 110,
     dropRate: 0,
-    start: [400, 250, 100, 60],
+    start: [270, 480, 690, 60],
     portals: [[50, 440, 910, 440]],
     ...(() => {
-      const d = drumLine([180, 330, 630, 780], () => 0, (k) => (k * 19) % 48);
+      // eight, in pairs: tight inside a pair, room between pairs to meet the ball that comes round
+      const d = drumLine([140, 210, 330, 400, 560, 630, 750, 820], () => 0, (k) => (k * 19) % 48);
       return { rects: d.rects, balls: [...d.balls, { x: 480, y: 200, size: 2, dir: 1 as const }] };
     })(),
   },
@@ -689,24 +697,30 @@ const floor = (name: string, levels: string[]) => ({
 export const FLOORS = [
   floor('Ground Floor', ['Warm-Up', 'Two-Way Street', 'The Big One', 'Open Sesame', 'Overhang', 'Squeeze', 'Trigger Happy']),
   floor('The Workshop', ['Quickstep', 'Jailbreak', 'Careful What You Grab', 'Convoy', 'Pressure Cooker', 'Pinball', 'Laser Surgery', 'Rush Hour']),
-  floor('Portal Gallery', ['Wormhole', 'Return Trip', 'Round Robin', 'Metronome', 'Through Traffic', 'Drum Line']),
+  floor('Portal Gallery', ['Wormhole', 'Return Trip', 'Round Robin', 'Metronome', 'Through Traffic']),
   floor('Split Level', ['Triplets', "Three's a Crowd", 'Quadruplets', 'Mixed Bag', 'Split Ends', 'Numbers Game', 'Hall of Mirrors']),
   floor('The Armoury', ['Point Blank', 'Light Show', 'En Garde', 'Broadside', 'Every Shot Counts', 'Arms Race']),
   floor('Heavy Weather', ['Tin Cans', 'Down Under', 'Upside Down', 'Headwind', 'Cannonballs', 'Weathervane', 'Flip Side']),
   floor('Machine Room', ['Carousel', 'Elevator', 'Crusher', 'Lockdown', 'Vertigo', 'Minefield']),
   floor('Overclocked', ['Too Much Coffee', 'Express', 'Photo Finish', 'Butterfingers', 'Espresso Shot', 'Do Not Touch', 'Jitterbug']),
-  floor('Summit', ['Last Stand', 'Revolving Door', 'Eye of the Storm', 'Chaos Theory']),
+  floor('Summit', ['Last Stand', 'Drum Line', 'Revolving Door', 'Eye of the Storm', 'Chaos Theory']),
 ];
 export const TOWER: Level[] = FLOORS.flatMap((f, i) => f.levels.map((L) => ({ ...L, floor: i + 1 })));
 /** Index in TOWER of each floor's first level. */
 export const FLOOR_START = FLOORS.map((_, i) => FLOORS.slice(0, i).reduce((a, f) => a + f.levels.length, 0));
 if (TOWER.length !== byName.size) throw new Error('every level must be on exactly one floor');
 
-/** The tower's order (level names) before v22 moved Photo Finish to Overclocked, Quickstep to the Workshop and
- *  Last Stand to the Summit. Old saves and level logs count from it. */
+/** The tower's order (level names) before v23 moved Drum Line from the end of the Portal Gallery to the Summit. */
+export const V22_TOWER: string[] = (() => {
+  const n = TOWER.map((L) => L.name).filter((x) => x !== 'Drum Line');
+  n.splice(n.indexOf('Through Traffic') + 1, 0, 'Drum Line');
+  return n;
+})();
+/** And before v22 moved Photo Finish to Overclocked, Quickstep to the Workshop and Last Stand to the Summit.
+ *  Old saves and level logs count from these. */
 export const V21_TOWER: string[] = (() => {
   const moved = ['Photo Finish', 'Quickstep', 'Last Stand'];
-  const n = TOWER.map((L) => L.name).filter((x) => !moved.includes(x));
+  const n = V22_TOWER.filter((x) => !moved.includes(x));
   n.splice(n.indexOf('Trigger Happy') + 1, 0, 'Photo Finish', 'Quickstep');
   n.splice(n.indexOf('Rush Hour') + 1, 0, 'Last Stand');
   return n;

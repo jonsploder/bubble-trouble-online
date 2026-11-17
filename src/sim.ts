@@ -126,11 +126,13 @@ export const TETHER = 170;
 /** Modes in which neighbouring players are roped together. */
 export const roped = (m: Mode) => m === 'tethered' || m === 'onegun' || m === 'vip';
 /** Reach of the short harpoon above the head, the sword in front, and the lance's length. */
-export const STUB_REACH = 48;
-/** Ticks between short harpoon shots (0.3 s). */
-export const STUB_CD = 18;
+export const STUB_REACH = 72;
+/** Ticks between short harpoon shots (0.6 s); it also rises at half a harpoon's speed. */
+export const STUB_CD = 36;
 export const SWORD_REACH = 46;
 export const LANCE_LEN = 96;
+/** Length of the floor bolt's tail, which grows with its speed. */
+export const boltTail = (v: number) => Math.min(180, Math.abs(v) * 0.15);
 const DART_V0 = 150, DART_ACC = 1400, LANCE_SPEED = 800;
 /** The rocket's body: half its width, and its length (px). */
 export const ROCKET_HALF = 9, ROCKET_LEN = 26;
@@ -499,7 +501,7 @@ function stepShots(s: State, L: Level, ev: GameEvent[]): number[] {
         if (--sh.t === 0) dead = true;
         if (sh.y < top) sh.y = top;
       } else {
-        sh.y -= WIRE_SPEED * DT;
+        sh.y -= (sh.lim > 0 ? WIRE_SPEED / 2 : WIRE_SPEED) * DT;
         if (sh.y <= top) {
           sh.y = top;
           if (sh.sticky) sh.t = ANCHOR_TICKS; else dead = true;
@@ -520,7 +522,8 @@ function stepShots(s: State, L: Level, ev: GameEvent[]): number[] {
       sh.x += sh.v * DT;
       if (sh.x < 0 || sh.x > W) dead = true;
       for (const r of s.rects) if (sh.x > r.x && sh.x < r.x + r.w && sh.y > r.y && sh.y < r.y + r.h) dead = true;
-      box = [sh.x - 7, sh.x + 7, sh.y - 3, sh.y + 3];
+      const back = sh.x - Math.sign(sh.v) * boltTail(sh.v); // the tail pops too
+      box = [Math.min(sh.x - 7, back), Math.max(sh.x + 7, back), sh.y - 3, sh.y + 3];
     } else if (sh.kind === 'darty') {
       sh.v -= DART_ACC * DT;
       sh.y += sh.v * DT;
