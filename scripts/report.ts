@@ -70,14 +70,72 @@ if (doSweep && sessions.length) {
 }
 
 // ------------------------------------------------------------------ levels
-interface LevelRec { set: string; players: number; mode: string; online: boolean; version: number; hist: number[][] }
-const recs: LevelRec[] = [];
+interface LevelRec { set: string; players: number; mode: string; online: boolean; version: number; hist: number[][];
+  /** Anonymous browser id and seconds played in the game (from late v23 on). */
+  pid?: string; secs?: number;
+  /** Online, a copy from a player other than player 1: counts players, not levels. */
+  guest?: boolean;
+  /** Day uploaded (from the file name). */
+  day: string }
+const allRecs: LevelRec[] = [];
 const lvDir = path.join('stats', 'levels');
 if (fs.existsSync(lvDir)) {
   for (const f of fs.readdirSync(lvDir)) {
-    try { const r = JSON.parse(fs.readFileSync(path.join(lvDir, f), 'utf8')); if (r.format === 'splitstorm-levels') recs.push(r); } catch { /* skip */ }
+    try {
+      const r = JSON.parse(fs.readFileSync(path.join(lvDir, f), 'utf8'));
+      if (r.format === 'splitstorm-levels') allRecs.push({ ...r, day: /^\d{4}-\d{2}-\d{2}/.exec(f)?.[0] ?? '?' });
+    } catch { /* skip */ }
   }
 }
+const recs = allRecs.filter((r) => !r.guest);
+
+// ------------------------------------------------------------------ players
+// One id per browser: two people on one keyboard count as one player, and clearing site data makes a new one.
+interface PlayerAgg { secs: number; games: number; days: Set<string>; first: string }
+const players = new Map<string, PlayerAgg>();
+for (const r of allRecs) {
+  if (!r.pid) continue;
+  let p = players.get(r.pid);
+  if (!p) { p = { secs: 0, games: 0, days: new Set(), first: r.day }; players.set(r.pid, p); }
+  p.secs += r.secs ?? 0;
+  p.games++;
+  p.days.add(r.day);
+  if (r.day < p.first) p.first = r.day;
+}
+const ps = [...players.values()], untracked = allRecs.filter((r) => !r.pid).length;
+const totalSecs = ps.reduce((a, p) => a + p.secs, 0);
+const hm = (secs: number) => (secs >= 3600 ? `${(secs / 3600).toFixed(1)} h` : `${(secs / 60).toFixed(secs < 600 ? 1 : 0)} min`);
+const BUCKETS: [string, number][] = [['under 1 min', 60], ['1-5 min', 300], ['5-15 min', 900], ['15-60 min', 3600], ['1-3 h', 3 * 3600], ['3 h or more', Infinity]];
+const bucketRows = BUCKETS.map(([label, top], i) => {
+  const lo = i ? BUCKETS[i - 1][1] : -1, n = ps.filter((p) => p.secs > lo && p.secs <= top).length;
+  return `<tr><td>${label}</td><td><span class="bar"><i style="width:${ps.length ? ((100 * n) / ps.length).toFixed(0) : 0}%"></i></span>${n}</td><td>${pct(n, ps.length, 0)}</td></tr>`;
+}).join('');
+const dayMap = new Map<string, { pids: Set<string>; fresh: number; secs: number }>();
+for (const r of allRecs) {
+  if (!r.pid) continue;
+  const d = dayMap.get(r.day) ?? { pids: new Set(), fresh: 0, secs: 0 };
+  if (!d.pids.has(r.pid) && players.get(r.pid)!.first === r.day) d.fresh++;
+  d.pids.add(r.pid);
+  d.secs += r.secs ?? 0;
+  dayMap.set(r.day, d);
+}
+const dayRows = [...dayMap].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 30)
+  .map(([day, d]) => `<tr><td>${day}</td><td>${d.pids.size}</td><td>${d.fresh}</td><td>${hm(d.secs)}</td><td>${hm(d.secs / d.pids.size)}</td></tr>`).join('');
+const playersHtml = `<h2>Players</h2>
+<p class="note">Players are counted by an anonymous id kept in each browser, so two people sharing a keyboard count as one, and the same person on another device or after clearing site data counts again. Time is time spent playing (not paused, not on menus). Every online player is counted, not only player 1.${untracked ? ` ${untracked} older game records from before the id was added are left out.` : ''}</p>
+<div class="cards">
+  <div class="card"><b>${ps.length}</b><span>unique players</span></div>
+  <div class="card"><b>${hm(totalSecs)}</b><span>played in total</span></div>
+  <div class="card"><b>${ps.length ? hm(median(ps.map((p) => p.secs))) : '-'}</b><span>median time per player</span></div>
+  <div class="card"><b>${ps.length ? hm(totalSecs / ps.length) : '-'}</b><span>average time per player</span></div>
+  <div class="card"><b>${ps.length ? median(ps.map((p) => p.games)) : '-'}</b><span>median games per player</span></div>
+  <div class="card"><b>${pct(ps.filter((p) => p.days.size > 1).length, ps.length, 0)}</b><span>came back on another day</span></div>
+</div>
+<h3>Time played per player</h3>
+<div class="scroll"><table><tr><th>Total time</th><th>Players</th><th>Share</th></tr>${bucketRows}</table></div>
+<h3>By day (UTC, last 30)</h3>
+<div class="scroll"><table><tr><th>Day</th><th>Players</th><th>New players</th><th>Time played</th><th>Per player</th></tr>${dayRows || '<tr><td colspan="5" class="muted">No player data yet</td></tr>'}</table></div>
+`;
 
 interface LevelAgg { games: number; attempts: number; clears: number; firstTries: number; firstClears: number; clearTimes: number[]; lost: number; quits: number; solo: [number, number]; group: [number, number] }
 const agg = new Map<string, LevelAgg>();
@@ -164,8 +222,9 @@ tr.total td { font-weight: 600; background: color-mix(in srgb, var(--accent) 8%,
   <div class="card"><b>${pct(liveTotals(results).stalled, liveTotals(results).ticks, 2)}</b><span>time frozen (live)</span></div>
   <div class="card"><b>${pct(replayed.errFrames, replayed.confirmed, 2)}</b><span>other players visibly off (today's netcode, replayed)</span></div>
   <div class="card"><b>${recs.length}</b><span>games with level stats</span></div>
+  <div class="card"><b>${ps.length}</b><span>unique players (${hm(totalSecs)} played)</span></div>
 </div>
-
+${playersHtml}
 <h2>Online play</h2>
 <p class="note">"Frozen", "Slowed" and "Visibly off" are what players actually experienced, recorded during each game. "Visibly off" is the share of frames where another player was drawn more than 8 px from where they really were (a prediction that then had to be corrected). The last row replays every session's real network conditions through today's netcode.</p>
 <div class="scroll"><table><tr><th>Version, players</th><th>Sessions</th><th>Minutes</th>${lagHead}<th>Desyncs</th></tr>${lagRows}${replayRow}</table></div>

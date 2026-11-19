@@ -231,6 +231,7 @@ function beginSession(m: StartMsg) {
   session = new RollbackSession(levels, me, newGame(levels, m.seats.length, m.level, m.seed, m.gm), (to, msg) => room.send(m.seats[to], { ...msg, gid: m.gid }));
   session.hl = new Highlights();
   sessionT0 = performance.now();
+  gameSecs = 0;
   gameStarted(true);
   acc = 0;
   pausePulse = false;
@@ -478,13 +479,26 @@ const startFloor = () => (chosenFloor >= 0 ? Math.min(chosenFloor, floorOf(reach
 
 /** Report how each attempt at each level went, for the difficulty report. One upload per game. */
 function uploadLevels(s: State, set: number, online: boolean, leaving = false) {
-  if (!TRACE_URL || (online && net.me !== 0)) return; // online, player 1 speaks for everyone
-  const body = levelRecord(s, set, online);
+  if (!TRACE_URL) return;
+  // online, player 1 speaks for everyone; the others send a copy marked `guest`, which the report only uses to count players
+  const body = levelRecord(s, set, online, online && net.me !== 0);
   // `keepalive` lets the upload finish while the page is closing
   if (body) fetch(`${TRACE_URL}/levels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: leaving }).catch(() => {});
 }
 
 const newId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+/** An anonymous id for this browser, made up on the first visit, so the report can count players and time per player.
+ *  Nothing else about the player goes with it. */
+const PLAYER_ID = (() => {
+  try {
+    let id = localStorage.getItem('splitstorm.player');
+    if (!id || !/^[a-z0-9]{8,32}$/.test(id)) { id = newId(); localStorage.setItem('splitstorm.player', id); }
+    return id;
+  } catch { return newId(); } // private window: one id per visit
+})();
+/** Seconds of play in the current game (not paused, not on the end screen). */
+let gameSecs = 0;
 
 /** The keys held through a local game, so it can be replayed exactly later: per player, [step, bits] at each change. */
 let rec: { id: string; seed: number; start: number; n: number; inp: number[][]; last: number[] } | null = null;
@@ -496,11 +510,11 @@ const packInputs = (a: number[]) => {
 };
 
 /** What gets uploaded about one game: every attempt at every level, and for local games the seed and keys to replay it. */
-function levelRecord(s: State, set: number, online: boolean): string | null {
+function levelRecord(s: State, set: number, online: boolean, guest = false): string | null {
   if (s.mode === 'versus') return null; // versus arenas aren't levels
   const hist = s.hist.slice();
   if (s.phase === 'play' && s.lt > 300) hist.push([s.level, s.lt, 2, s.lost]); // gave up mid-attempt
-  const base = { format: 'splitstorm-levels', v: 1, id: !online && rec ? rec.id : newId(), version: VERSION, set: SETS[set].id, players: s.players.length, mode: s.mode, online, hist };
+  const base = { format: 'splitstorm-levels', v: 1, id: !online && rec ? rec.id : newId(), version: VERSION, set: SETS[set].id, players: s.players.length, mode: s.mode, online, hist, pid: PLAYER_ID, secs: Math.round(gameSecs), ...(guest ? { guest: true } : {}) };
   if (online || !rec) return hist.length ? JSON.stringify(base) : null;
   if (rec.n < 300) return null; // under 5 seconds: nothing to learn
   if (!hist.length) hist.push([s.level, s.lt, 2, s.lost]); // the collector wants at least one entry
@@ -637,6 +651,7 @@ function startLocal(level: number) {
   hl = new Highlights();
   musicShift = seed % 97;
   rec = { id: newId(), seed, start: level, n: 0, inp: Array.from({ length: n }, () => []), last: new Array<number>(n).fill(0) };
+  gameSecs = 0;
   gameStarted(false);
   acc = 0;
   pausePulse = false;
@@ -1080,7 +1095,7 @@ function frame(now: number) {
       }
       playEvents(session.sounds); session.sounds.length = 0;
     }
-    if (!session.predicted.paused && session.predicted.phase !== 'over' && session.predicted.phase !== 'won') addPlayTime(dt);
+    if (!session.predicted.paused && session.predicted.phase !== 'over' && session.predicted.phase !== 'won') { addPlayTime(dt); gameSecs += dt; }
     const s = session.predicted;
     reached(session.confirmed);
     const waiting = session.stalled && session.silence > 20;
@@ -1107,7 +1122,7 @@ function frame(now: number) {
       if (f && levels === TOWER && events.some((e) => e.t === 'floor')) floorCleared(game, f - 1);
       playEvents(events); fxEvents(events); events.length = 0;
     }
-    if (!game.paused && game.phase !== 'over' && game.phase !== 'won') addPlayTime(dt);
+    if (!game.paused && game.phase !== 'over' && game.phase !== 'won') { addPlayTime(dt); gameSecs += dt; }
     if (!practice && levels === TOWER) reached(game);
     drawGame(ctx, game, levelAt(game, levels), where(game), game.paused ? 0 : dt, false, undefined, nowPlaying());
   } else if (screen === 'lobby') {

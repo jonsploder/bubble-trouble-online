@@ -107,7 +107,11 @@ long it lasted, whether it was cleared, failed or given up, and the lives lost. 
 one computer (solo or two players) also includes its random seed and every key change, so
 it can be replayed exactly; it uploads when the game ends and also if the page is closed or
 reloaded mid-game. Both go to the Worker in `worker/` (Cloudflare free plan, Workers KV).
-Logs hold timings, key presses and packet arrival times; no IP addresses or names. The dev
+Each level record also carries an anonymous id made up by the browser on its first visit
+(`splitstorm.player` in localStorage) and the seconds played in that game, so the report can
+count unique players and time per player; online, the other players send a copy marked
+`guest` that only counts towards that. Logs hold timings, key presses and packet arrival
+times; no IP addresses or names. The dev
 server never uploads.
 
 ```bash
